@@ -1,14 +1,19 @@
 var gulp = require('gulp'),
     concat = require('gulp-concat'),
     uglify = require('gulp-uglify'),
-    rename = require('gulp-rename'),
-    es6ModuleTranspiler = require("gulp-es6-module-transpiler"),
-    amdOptimize = require("amd-optimize");
+    rename = require('gulp-rename');
 
-gulp.task('amd', function() {
-    gulp.src(["src/*.js", "src/**/*.js"])
-    .pipe(es6ModuleTranspiler({ type: "amd" }))
-    .pipe(amdOptimize('htmlliterals-preprocessor', { preserveComments: true }))
+gulp.task('dist', function() {
+    gulp.src([
+        "src/_preamble.js",
+        "src/tokenize.js",
+        "src/AST.js",
+        "src/parse.js",
+        "src/genCode.js",
+        "src/preprocess.js",
+        "src/shims.js",
+        "src/_postamble.js"
+    ])
     .pipe(concat("htmlliterals-preprocessor.js"))
     .pipe(gulp.dest("dist"))
     .pipe(rename("htmlliterals-preprocessor.min.js"))
@@ -16,5 +21,5 @@ gulp.task('amd', function() {
     .pipe(gulp.dest("dist"));
 });
 
-gulp.task('default', ['amd']);
-gulp.watch('src/*.js', ['amd']);
+gulp.task('default', ['dist']);
+gulp.watch('src/*.js', ['dist']);
