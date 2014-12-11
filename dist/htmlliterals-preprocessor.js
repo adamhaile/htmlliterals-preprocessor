@@ -1,24 +1,24 @@
-(function () {
+(function (package) {
     // nano-implementation of require.js-like define(name, deps, impl) for internal use
-    (function (package) {
-        var definitions = {},
-            publish = {};
+    var definitions = {},
+        publish = {};
 
-        package(function define(name, deps, fn) {
-            if (definitions.hasOwnProperty(name)) throw new Error("define: cannot redefine module " + name);
-            definitions[name] = fn.apply(null, deps.map(function (dep) {
-                if (!definitions.hasOwnProperty(dep)) throw new Error("define: module " + dep + " required by " + name + " has not been defined.");
-                return definitions[dep];
-            }));
-        });
+    package(function define(name, deps, fn) {
+        if (definitions.hasOwnProperty(name)) throw new Error("define: cannot redefine module " + name);
+        definitions[name] = fn.apply(null, deps.map(function (dep) {
+            if (!definitions.hasOwnProperty(dep)) throw new Error("define: module " + dep + " required by " + name + " has not been defined.");
+            return definitions[dep];
+        }));
+    });
 
-        if (typeof exports === 'object') publish = exports; // CommonJS
-        else if (typeof define === 'function') define([], function () { return publish; }); // AMD
-        else publish = this.htmlliterals = this.htmlliterals || publish; // fallback to global object
+    if (typeof exports === 'object') publish = exports; // CommonJS
+    else if (typeof define === 'function') define([], function () { return publish; }); // AMD
+    else publish = this.htmlliterals = this.htmlliterals || publish; // fallback to global object
 
-        publish.preprocess = definitions.preprocess;
+    publish.preprocess = definitions.preprocess;
 
-    })(function (define) {
+})(function (define) {
+    "use strict";
 
 define('tokenize', [], function () {
     /// tokens:
@@ -532,7 +532,7 @@ define('genCode', ['AST'], function (AST) {
     AST.CodeTopLevel.prototype.genCode   =
     AST.EmbeddedCode.prototype.genCode   = function () { return concatResults(this.segments, 'genCode'); };
     AST.CodeText.prototype.genCode       = function () { return this.text; };
-    var htmlLiteralId = Math.floor(Math.random() * Math.pow(2, 31));
+    var htmlLiteralId = 0; //Math.floor(Math.random() * Math.pow(2, 31));
     AST.HtmlLiteral.prototype.genCode = function () {
         var html = concatResults(this.nodes, 'genHtml'),
             nl = "\n" + indent(this.col),
@@ -558,9 +558,9 @@ define('genCode', ['AST'], function (AST) {
             properties = concatResults(this.properties, 'genDirective', nl),
             directives = concatResults(this.directives, 'genDirective', nl);
 
-        return childDirectives + (childDirectives && (properties || directives) ? nl : "")
-            + properties + (properties && directives ? nl : "")
-            + directives;
+        return properties + (properties && (directives || childDirectives) ? nl : "")
+            + directives + (directives && childDirectives ? nl : "")
+            + childDirectives;
     };
     AST.HtmlComment.prototype.genDirectives =
     AST.HtmlText.prototype.genDirectives    = function (nl) { return null; };
@@ -572,22 +572,18 @@ define('genCode', ['AST'], function (AST) {
     AST.Property.prototype.genDirective = function () {
         var code = this.code.genCode();
         if (rx.eventProperty.test(this.name)) code = "function (__) { " + code + "; }";
-        return ".property(function (__) { return __." + this.name + " = " + code + "; })";
+        return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
     AST.Directive.prototype.genDirective = function () {
         return ".directive(" + codeStr(this.name) + ", function (__) { __" + this.code.genCode() + "; })";
     };
     AST.AttrStyleDirective.prototype.genDirective = function () {
-        var directive = directives[this.name];
-        if (directive === undefined)
-            throw new Error("Unrecognized directive @" + this.name);
-
         var code = ".directive(" + codeStr(this.name) + ", function (__) { __(";
 
         for (var i = 0; i < this.params.length; i++)
             code += codeStr(this.params[i]) + ", ";
 
-        code += directive.wrapCallback ? 'function (__) { ' + this.code.genCode() + '; }' :
+        code += rx.eventProperty.test(this.name) ? 'function (__) { ' + this.code.genCode() + '; }' :
                 this.code.genCode();
 
         code += "); })";
@@ -646,31 +642,6 @@ define('genCode', ['AST'], function (AST) {
         return new Array(col + 1).join(" ");
     }
 });
-
-define('preprocess', ['tokenize', 'parse', 'shims'], function (tokenize, parse, shimmed) {
-    return function preprocess(str) {
-        var toks = tokenize(str),
-            ast = parse(toks);
-
-        if (shimmed) ast.shim();
-
-        var out = ast.genCode();
-
-        return out;
-    }
-});
-
-/*
-function add(str) {
-    var src = K.DOM.src(str),
-        script = document.createElement('script');
-
-    script.type = 'text/javascript';
-    script.src  = 'data:text/javascript;charset=utf-8,' + escape(src);
-
-    document.body.appendChild(script);
-}
-*/
 
 // Cross-browser compatibility shims
 define('shims', ['AST'], function (AST) {
@@ -751,5 +722,29 @@ define('shims', ['AST'], function (AST) {
 
 });
 
-    });
-})();
+define('preprocess', ['tokenize', 'parse', 'shims'], function (tokenize, parse, shimmed) {
+    return function preprocess(str) {
+        var toks = tokenize(str),
+            ast = parse(toks);
+
+        if (shimmed) ast.shim();
+
+        var out = ast.genCode();
+
+        return out;
+    }
+});
+
+/*
+function add(str) {
+    var src = K.DOM.src(str),
+        script = document.createElement('script');
+
+    script.type = 'text/javascript';
+    script.src  = 'data:text/javascript;charset=utf-8,' + escape(src);
+
+    document.body.appendChild(script);
+}
+*/
+
+});

@@ -12,7 +12,7 @@ define('genCode', ['AST'], function (AST) {
     AST.CodeTopLevel.prototype.genCode   =
     AST.EmbeddedCode.prototype.genCode   = function () { return concatResults(this.segments, 'genCode'); };
     AST.CodeText.prototype.genCode       = function () { return this.text; };
-    var htmlLiteralId = Math.floor(Math.random() * Math.pow(2, 31));
+    var htmlLiteralId = 0; //Math.floor(Math.random() * Math.pow(2, 31));
     AST.HtmlLiteral.prototype.genCode = function () {
         var html = concatResults(this.nodes, 'genHtml'),
             nl = "\n" + indent(this.col),
@@ -38,9 +38,9 @@ define('genCode', ['AST'], function (AST) {
             properties = concatResults(this.properties, 'genDirective', nl),
             directives = concatResults(this.directives, 'genDirective', nl);
 
-        return childDirectives + (childDirectives && (properties || directives) ? nl : "")
-            + properties + (properties && directives ? nl : "")
-            + directives;
+        return properties + (properties && (directives || childDirectives) ? nl : "")
+            + directives + (directives && childDirectives ? nl : "")
+            + childDirectives;
     };
     AST.HtmlComment.prototype.genDirectives =
     AST.HtmlText.prototype.genDirectives    = function (nl) { return null; };
@@ -52,22 +52,18 @@ define('genCode', ['AST'], function (AST) {
     AST.Property.prototype.genDirective = function () {
         var code = this.code.genCode();
         if (rx.eventProperty.test(this.name)) code = "function (__) { " + code + "; }";
-        return ".property(function (__) { return __." + this.name + " = " + code + "; })";
+        return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
     AST.Directive.prototype.genDirective = function () {
         return ".directive(" + codeStr(this.name) + ", function (__) { __" + this.code.genCode() + "; })";
     };
     AST.AttrStyleDirective.prototype.genDirective = function () {
-        var directive = directives[this.name];
-        if (directive === undefined)
-            throw new Error("Unrecognized directive @" + this.name);
-
         var code = ".directive(" + codeStr(this.name) + ", function (__) { __(";
 
         for (var i = 0; i < this.params.length; i++)
             code += codeStr(this.params[i]) + ", ";
 
-        code += directive.wrapCallback ? 'function (__) { ' + this.code.genCode() + '; }' :
+        code += rx.eventProperty.test(this.name) ? 'function (__) { ' + this.code.genCode() + '; }' :
                 this.code.genCode();
 
         code += "); })";

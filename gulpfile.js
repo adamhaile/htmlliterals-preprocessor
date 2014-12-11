@@ -10,8 +10,8 @@ gulp.task('dist', function() {
         "src/AST.js",
         "src/parse.js",
         "src/genCode.js",
-        "src/preprocess.js",
         "src/shims.js",
+        "src/preprocess.js",
         "src/_postamble.js"
     ])
     .pipe(concat("htmlliterals-preprocessor.js"))
