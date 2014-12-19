@@ -41,7 +41,9 @@ define('parse', ['AST'], function (AST) {
                 } else if (IS('"') || IS("'")) {
                     text += quotedString();
                 } else if (IS('//')) {
-                    text += codeComment();
+                    text += codeSingleLineComment();
+                } else if (IS('/*')) {
+                    text += codeMultiLineComment();
                 } else {
                     text += TOK, NEXT();
                 }
@@ -292,7 +294,9 @@ define('parse', ['AST'], function (AST) {
                 if (IS("'") || IS('"')) {
                     text += quotedString();
                 } else if (IS('//')) {
-                    text += codeComment();
+                    text += codeSingleLineComment();
+                } else if (IS'/*') {
+                    text += codeMultiLineComment();
                 } else if (IS("<") || IS('<!--')) {
                     if (text) segments.push(new AST.CodeText(text));
                     text = "";
@@ -330,7 +334,7 @@ define('parse', ['AST'], function (AST) {
             return text;
         }
 
-        function codeComment() {
+        function codeSingleLineComment() {
             if (NOT("//")) ERR("not in code comment");
 
             var text = "";
@@ -341,6 +345,22 @@ define('parse', ['AST'], function (AST) {
 
             // EOF within a code comment is ok, just means that the text ended with a comment
             if (!EOF) text += TOK, NEXT();
+
+            return text;
+        }
+
+        function codeMultiLineComment() {
+            if (NOT("/*")) ERR("not in code comment");
+
+            var text = "";
+
+            while (!EOF && NOT('*/')) {
+                text += TOK, NEXT();
+            }
+
+            if (EOF) ERR("unterminated multi-line comment");
+
+            text += TOK, NEXT();
 
             return text;
         }
