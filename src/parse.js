@@ -295,7 +295,7 @@ define('parse', ['AST'], function (AST) {
                     text += quotedString();
                 } else if (IS('//')) {
                     text += codeSingleLineComment();
-                } else if (IS'/*') {
+                } else if (IS('/*')) {
                     text += codeMultiLineComment();
                 } else if (IS("<") || IS('<!--')) {
                     if (text) segments.push(new AST.CodeText(text));

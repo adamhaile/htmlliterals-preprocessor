@@ -55,10 +55,10 @@ define('genCode', ['AST'], function (AST) {
         return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
     AST.Directive.prototype.genDirective = function () {
-        return ".directive(" + codeStr(this.name) + ", function (__) { __" + this.code.genCode() + "; })";
+        return "." + this.name + "(function (__) { __" + this.code.genCode() + "; })";
     };
     AST.AttrStyleDirective.prototype.genDirective = function () {
-        var code = ".directive(" + codeStr(this.name) + ", function (__) { __(";
+        var code = "." + this.name + "(function (__) { __(";
 
         for (var i = 0; i < this.params.length; i++)
             code += codeStr(this.params[i]) + ", ";

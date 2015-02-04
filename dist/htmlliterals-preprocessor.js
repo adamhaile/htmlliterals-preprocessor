@@ -40,11 +40,13 @@ define('tokenize', [], function () {
     /// '
     /// //
     /// \n
+    /// /*
+    /// */
     /// misc (any string not containing one of the above)
     // pre-compiled regular expressions
 
     var rx = {
-        tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|(?:[^<>@=\/@=()[\]{}"'\n-]|(?!-->)-|\/(?![>/])|(?!<\/?\w|<!--)<\/?)+/g,
+        tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|\/\*|\*\/|(?:[^<>@=\/@=()[\]{}"'\n*-]|(?!-->)-|\/(?![>/*])|\*(?!\/)|(?!<\/?\w|<!--)<\/?)+/g,
     };
 
     return function tokenize(str) {
@@ -145,7 +147,9 @@ define('parse', ['AST'], function (AST) {
                 } else if (IS('"') || IS("'")) {
                     text += quotedString();
                 } else if (IS('//')) {
-                    text += codeComment();
+                    text += codeSingleLineComment();
+                } else if (IS('/*')) {
+                    text += codeMultiLineComment();
                 } else {
                     text += TOK, NEXT();
                 }
@@ -396,7 +400,9 @@ define('parse', ['AST'], function (AST) {
                 if (IS("'") || IS('"')) {
                     text += quotedString();
                 } else if (IS('//')) {
-                    text += codeComment();
+                    text += codeSingleLineComment();
+                } else if (IS('/*')) {
+                    text += codeMultiLineComment();
                 } else if (IS("<") || IS('<!--')) {
                     if (text) segments.push(new AST.CodeText(text));
                     text = "";
@@ -434,7 +440,7 @@ define('parse', ['AST'], function (AST) {
             return text;
         }
 
-        function codeComment() {
+        function codeSingleLineComment() {
             if (NOT("//")) ERR("not in code comment");
 
             var text = "";
@@ -445,6 +451,22 @@ define('parse', ['AST'], function (AST) {
 
             // EOF within a code comment is ok, just means that the text ended with a comment
             if (!EOF) text += TOK, NEXT();
+
+            return text;
+        }
+
+        function codeMultiLineComment() {
+            if (NOT("/*")) ERR("not in code comment");
+
+            var text = "";
+
+            while (!EOF && NOT('*/')) {
+                text += TOK, NEXT();
+            }
+
+            if (EOF) ERR("unterminated multi-line comment");
+
+            text += TOK, NEXT();
 
             return text;
         }
@@ -575,10 +597,10 @@ define('genCode', ['AST'], function (AST) {
         return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
     AST.Directive.prototype.genDirective = function () {
-        return ".directive(" + codeStr(this.name) + ", function (__) { __" + this.code.genCode() + "; })";
+        return "." + this.name + "(function (__) { __" + this.code.genCode() + "; })";
     };
     AST.AttrStyleDirective.prototype.genDirective = function () {
-        var code = ".directive(" + codeStr(this.name) + ", function (__) { __(";
+        var code = "." + this.name + "(function (__) { __(";
 
         for (var i = 0; i < this.params.length; i++)
             code += codeStr(this.params[i]) + ", ";
