@@ -547,7 +547,10 @@ define('genCode', ['AST'], function (AST) {
         eventProperty      : /^on/,
         backslashes        : /\\/g,
         newlines           : /\n/g,
-        singleQuotes       : /'/g
+        singleQuotes       : /'/g,
+        firstline          : /^[^\n]*/,
+        lastline           : /[^\n]*$/,
+        nonws              : /\S/g
     };
 
     // genCode
@@ -555,13 +558,15 @@ define('genCode', ['AST'], function (AST) {
     AST.EmbeddedCode.prototype.genCode   = function () { return concatResults(this.segments, 'genCode'); };
     AST.CodeText.prototype.genCode       = function () { return this.text; };
     var htmlLiteralId = 0; //Math.floor(Math.random() * Math.pow(2, 31));
-    AST.HtmlLiteral.prototype.genCode = function () {
+    AST.HtmlLiteral.prototype.genCode = function (prior) {
         var html = concatResults(this.nodes, 'genHtml'),
-            nl = "\n" + indent(this.col),
+            nl = "\n" + indent(prior),
             directives = this.nodes.length > 1 ? genChildDirectives(this.nodes, nl) : this.nodes[0].genDirectives(nl),
-            code = "(htmlliterals.cachedParse(" + htmlLiteralId++ + "," + nl + codeStr(html) + "))";
+            code = "new htmlliterals.Shell(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
 
-        if (directives) code = "(new htmlliterals.Shell" + code + nl + directives + nl + ".node)";
+        if (directives) code += nl + directives + nl;
+
+        code = "(" + code + ".node)";
 
         return code;
     };
@@ -616,8 +621,9 @@ define('genCode', ['AST'], function (AST) {
     function genChildDirectives(childNodes, nl) {
         var indices = [],
             directives = [],
+            identifiers = [],
             cnl = nl + "    ",
-            ccnl = cnl + "    ",
+            ccnl = cnl + "     ",
             directive,
             i,
             result = "";
@@ -626,6 +632,7 @@ define('genCode', ['AST'], function (AST) {
             directive = childNodes[i].genDirectives(ccnl);
             if (directive) {
                 indices.push(i);
+                identifiers.push(childIdentifier(childNodes[i]));
                 directives.push(directive);
             }
         }
@@ -634,6 +641,7 @@ define('genCode', ['AST'], function (AST) {
             result += ".childNodes([" + indices.join(", ") + "], function (__) {" + cnl;
             for (i = 0; i < directives.length; i++) {
                 if (i) result += cnl;
+                result += "// " + identifiers[i] + cnl;
                 result += "__[" + i + "]" + directives[i] + ";"
             }
             result += nl + "})";
@@ -647,7 +655,7 @@ define('genCode', ['AST'], function (AST) {
 
         for (i = 0; i < children.length; i++) {
             if (i && sep) result += sep;
-            result += children[i][method]();
+            result += children[i][method](result);
         }
 
         return result;
@@ -660,8 +668,19 @@ define('genCode', ['AST'], function (AST) {
                    + "'";
     }
 
-    function indent(col) {
-        return new Array(col + 1).join(" ");
+    function indent(prior) {
+        var lastline = rx.lastline.exec(prior);
+        lastline = lastline ? lastline[0] : '';
+        return lastline.replace(rx.nonws, " ");
+    }
+
+    function childIdentifier(child) {
+        return firstline(child.beginTag || child.text || child.genHtml());
+    }
+
+    function firstline(str) {
+        var l = rx.firstline.exec(str);
+        return l ? l[0] : '';
     }
 });
 
