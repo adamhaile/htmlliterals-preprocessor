@@ -30,18 +30,20 @@ define('AST', [], function () {
             this.col = col; // integer
             this.code = code; // EmbeddedCode
         },
-        Property: function (name, code) {
+        Property: function (name, code, callback) {
             this.name = name; // string
             this.code = code; // EmbeddedCode
+            this.callback = callback; // bool
         },
         Directive: function (name, code) {
             this.name = name; // string
             this.code = code; // EmbeddedCode
         },
-        AttrStyleDirective: function (name, params, code) {
+        AttrStyleDirective: function (name, params, code, callback) {
             this.name = name; // string
             this.params = params; // [ string ]
             this.code = code; // EmbeddedCode
+            this.callback = callback; // bool
         }
     };
 });

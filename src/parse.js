@@ -2,7 +2,7 @@ define('parse', ['AST'], function (AST) {
 
     // pre-compiled regular expressions
     var rx = {
-        propertyLeftSide   : /\s(\S+)\s*=\s*$/,
+        propertyLeftSide   : /\s(\S+)\s*=>?\s*$/,
         embeddedCodePrefix : /^[+\-!~]*[a-zA-Z_$][a-zA-Z_$0-9]*/, // prefix unary operators + identifier
         embeddedCodeInterim: /^(?:\.[a-zA-Z_$][a-zA-Z_$0-9]+)+/, // property chain, like .bar.blech
         embeddedCodeSuffix : /^\+\+|--/, // suffix unary operators
@@ -194,23 +194,26 @@ define('parse', ['AST'], function (AST) {
             if(NOT('=')) ERR("not at equals sign of a property assignment");
 
             var match,
-                name;
+                name,
+                callback = false;
 
             beginTag += TOK, NEXT();
+
+            if (IS('>')) callback = true, beginTag += TOK, NEXT();
 
             if (WS()) beginTag += TOK, NEXT();
 
             match = rx.propertyLeftSide.exec(beginTag);
 
             // check if it's an attribute not a property assignment
-            if (match && NOT('"') && NOT("'")) {
+            if (match && (callback || (NOT('"') && NOT("'")))) {
                 beginTag = beginTag.substring(0, beginTag.length - match[0].length);
 
                 name = match[1];
 
                 SPLIT(rx.leadingWs);
 
-                properties.push(new AST.Property(name, embeddedCode()));
+                properties.push(new AST.Property(name, embeddedCode(), callback));
             }
 
             return beginTag;
@@ -223,7 +226,8 @@ define('parse', ['AST'], function (AST) {
 
             var name = SPLIT(rx.directiveName),
                 segment,
-                segments;
+                segments,
+                callback = false;
 
             if (!name) ERR("directive must have name");
 
@@ -238,11 +242,15 @@ define('parse', ['AST'], function (AST) {
 
                 if (NOT('=')) ERR("unrecognized directive - must have form like @foo:bar = ... or @foo( ... )");
 
-                NEXT(), SPLIT(rx.leadingWs);
+                NEXT();
+
+                if (IS('>')) callback = true, NEXT();
+
+                SPLIT(rx.leadingWs);
 
                 name = name.split(":");
 
-                return new AST.AttrStyleDirective(name[0], name.slice(1), embeddedCode());
+                return new AST.AttrStyleDirective(name[0], name.slice(1), embeddedCode(), callback);
             }
         }
 

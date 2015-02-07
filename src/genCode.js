@@ -20,7 +20,7 @@ define('genCode', ['AST'], function (AST) {
         var html = concatResults(this.nodes, 'genHtml'),
             nl = "\n" + indent(prior),
             directives = this.nodes.length > 1 ? genChildDirectives(this.nodes, nl) : this.nodes[0].genDirectives(nl),
-            code = "new htmlliterals.Shell(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
+            code = "new Html(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
 
         if (directives) code += nl + directives + nl;
 
@@ -56,7 +56,7 @@ define('genCode', ['AST'], function (AST) {
     // genDirective
     AST.Property.prototype.genDirective = function () {
         var code = this.code.genCode();
-        if (rx.eventProperty.test(this.name)) code = "function (__) { " + code + "; }";
+        if (this.callback) code = genCallback(this.name, code);
         return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
     AST.Directive.prototype.genDirective = function () {
@@ -68,8 +68,7 @@ define('genCode', ['AST'], function (AST) {
         for (var i = 0; i < this.params.length; i++)
             code += codeStr(this.params[i]) + ", ";
 
-        code += rx.eventProperty.test(this.name) ? 'function (__) { ' + this.code.genCode() + '; }' :
-                this.code.genCode();
+        code += this.callback ? genCallback(this.name, this.code.genCode()) : this.code.genCode();
 
         code += "); })";
 
@@ -96,7 +95,7 @@ define('genCode', ['AST'], function (AST) {
         }
 
         if (indices.length) {
-            result += ".childNodes([" + indices.join(", ") + "], function (__) {" + cnl;
+            result += ".child([" + indices.join(", ") + "], function (__) {" + cnl;
             for (i = 0; i < directives.length; i++) {
                 if (i) result += cnl;
                 result += "// " + identifiers[i] + cnl;
@@ -124,6 +123,11 @@ define('genCode', ['AST'], function (AST) {
                         .replace(rx.singleQuotes, "\\'")
                         .replace(rx.newlines, "\\\n")
                    + "'";
+    }
+
+    function genCallback(name, code) {
+        var param = rx.eventProperty.test(name) ? name.substring(2) : "__";
+        return "function (" + param + ") { " + code + " }";
     }
 
     function indent(prior) {

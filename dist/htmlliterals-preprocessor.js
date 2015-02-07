@@ -43,16 +43,109 @@ define('tokenize', [], function () {
     /// /*
     /// */
     /// misc (any string not containing one of the above)
-    // pre-compiled regular expressions
 
+    // pre-compiled regular expressions
     var rx = {
         tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|\/\*|\*\/|(?:[^<>@=\/@=()[\]{}"'\n*-]|(?!-->)-|\/(?![>/*])|\*(?!\/)|(?!<\/?\w|<!--)<\/?)+/g,
     };
 
     return function tokenize(str) {
-        var TOKS = str.match(rx.tokens);
+        var toks = str.match(rx.tokens);
 
-        return TOKS;
+        return toks;
+        //return TokenStream(toks);
+    }
+
+    function TokenStream(toks) {
+        var i       = 0,
+            eof     = toks.length === 0,
+            tok     = !eof && toks[i],
+            line    = 0,
+            col     = 0,
+            segment = { line: line, col: col };
+
+        return {
+            TOK:      function TOK() { return TOK; },
+            EOF:      function EOF() { return EOF; },
+            NEXT:     NEXT,
+            ERR:      ERR,
+            IS:       IS,
+            NOT:      NOT,
+            MATCH:    MATCH,
+            WS:       WS,
+            SPLIT:    SPLIT,
+            SEGMENT:  SEGMENT,
+            MARK:     MARK,
+            ROLLBACK: ROLLBACK
+        };
+
+        // token stream ops
+        function NEXT() {
+            if (tok === "\n") line++, col = 0;
+            else if (tok) col += tok.length;
+
+            if (++i >= toks.length) eof = true, tok = null;
+            else tok = toks[i];
+        }
+
+        function ERR(msg) {
+            throw new Error(msg);
+        }
+
+        function IS(t) {
+            return tok === t;
+        }
+
+        function NOT(t) {
+            return tok !== t;
+        }
+
+        function MATCH(rx) {
+            return rx.test(tok);
+        }
+
+        function WS() {
+            return !!MATCH(rx.ws);
+        }
+
+        function SPLIT(rx) {
+            var m = rx.exec(tok);
+            if (m && (m = m[0])) {
+                col += m.length;
+                tok = tok.substring(m.length);
+                if (tok === "") NEXT();
+                return m;
+            } else {
+                return null;
+            }
+        }
+
+        function SEGMENT() {
+            return {
+                start: segment,
+                end: segment = { line: line, col: col}
+            };
+        }
+
+        function MARK() {
+            return {
+                tok:     tok,
+                i:       i,
+                eof:     eof,
+                line:    line,
+                col:     col,
+                segment: segment
+            };
+        }
+
+        function ROLLBACK(mark) {
+            tok     = mark.tok;
+            i       = mark.i;
+            eof     = mark.eof;
+            line    = mark.line;
+            col     = mark.col;
+            segment = mark.segment;
+        }
     }
 });
 
@@ -88,18 +181,20 @@ define('AST', [], function () {
             this.col = col; // integer
             this.code = code; // EmbeddedCode
         },
-        Property: function (name, code) {
+        Property: function (name, code, callback) {
             this.name = name; // string
             this.code = code; // EmbeddedCode
+            this.callback = callback; // bool
         },
         Directive: function (name, code) {
             this.name = name; // string
             this.code = code; // EmbeddedCode
         },
-        AttrStyleDirective: function (name, params, code) {
+        AttrStyleDirective: function (name, params, code, callback) {
             this.name = name; // string
             this.params = params; // [ string ]
             this.code = code; // EmbeddedCode
+            this.callback = callback; // bool
         }
     };
 });
@@ -108,7 +203,7 @@ define('parse', ['AST'], function (AST) {
 
     // pre-compiled regular expressions
     var rx = {
-        propertyLeftSide   : /\s(\S+)\s*=\s*$/,
+        propertyLeftSide   : /\s(\S+)\s*=>?\s*$/,
         embeddedCodePrefix : /^[+\-!~]*[a-zA-Z_$][a-zA-Z_$0-9]*/, // prefix unary operators + identifier
         embeddedCodeInterim: /^(?:\.[a-zA-Z_$][a-zA-Z_$0-9]+)+/, // property chain, like .bar.blech
         embeddedCodeSuffix : /^\+\+|--/, // suffix unary operators
@@ -300,23 +395,26 @@ define('parse', ['AST'], function (AST) {
             if(NOT('=')) ERR("not at equals sign of a property assignment");
 
             var match,
-                name;
+                name,
+                callback = false;
 
             beginTag += TOK, NEXT();
+
+            if (IS('>')) callback = true, beginTag += TOK, NEXT();
 
             if (WS()) beginTag += TOK, NEXT();
 
             match = rx.propertyLeftSide.exec(beginTag);
 
             // check if it's an attribute not a property assignment
-            if (match && NOT('"') && NOT("'")) {
+            if (match && (callback || (NOT('"') && NOT("'")))) {
                 beginTag = beginTag.substring(0, beginTag.length - match[0].length);
 
                 name = match[1];
 
                 SPLIT(rx.leadingWs);
 
-                properties.push(new AST.Property(name, embeddedCode()));
+                properties.push(new AST.Property(name, embeddedCode(), callback));
             }
 
             return beginTag;
@@ -329,7 +427,8 @@ define('parse', ['AST'], function (AST) {
 
             var name = SPLIT(rx.directiveName),
                 segment,
-                segments;
+                segments,
+                callback = false;
 
             if (!name) ERR("directive must have name");
 
@@ -344,11 +443,15 @@ define('parse', ['AST'], function (AST) {
 
                 if (NOT('=')) ERR("unrecognized directive - must have form like @foo:bar = ... or @foo( ... )");
 
-                NEXT(), SPLIT(rx.leadingWs);
+                NEXT();
+
+                if (IS('>')) callback = true, NEXT();
+
+                SPLIT(rx.leadingWs);
 
                 name = name.split(":");
 
-                return new AST.AttrStyleDirective(name[0], name.slice(1), embeddedCode());
+                return new AST.AttrStyleDirective(name[0], name.slice(1), embeddedCode(), callback);
             }
         }
 
@@ -562,7 +665,7 @@ define('genCode', ['AST'], function (AST) {
         var html = concatResults(this.nodes, 'genHtml'),
             nl = "\n" + indent(prior),
             directives = this.nodes.length > 1 ? genChildDirectives(this.nodes, nl) : this.nodes[0].genDirectives(nl),
-            code = "new htmlliterals.Shell(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
+            code = "new Html(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
 
         if (directives) code += nl + directives + nl;
 
@@ -598,7 +701,7 @@ define('genCode', ['AST'], function (AST) {
     // genDirective
     AST.Property.prototype.genDirective = function () {
         var code = this.code.genCode();
-        if (rx.eventProperty.test(this.name)) code = "function (__) { " + code + "; }";
+        if (this.callback) code = genCallback(this.name, code);
         return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
     AST.Directive.prototype.genDirective = function () {
@@ -610,8 +713,7 @@ define('genCode', ['AST'], function (AST) {
         for (var i = 0; i < this.params.length; i++)
             code += codeStr(this.params[i]) + ", ";
 
-        code += rx.eventProperty.test(this.name) ? 'function (__) { ' + this.code.genCode() + '; }' :
-                this.code.genCode();
+        code += this.callback ? genCallback(this.name, this.code.genCode()) : this.code.genCode();
 
         code += "); })";
 
@@ -638,7 +740,7 @@ define('genCode', ['AST'], function (AST) {
         }
 
         if (indices.length) {
-            result += ".childNodes([" + indices.join(", ") + "], function (__) {" + cnl;
+            result += ".child([" + indices.join(", ") + "], function (__) {" + cnl;
             for (i = 0; i < directives.length; i++) {
                 if (i) result += cnl;
                 result += "// " + identifiers[i] + cnl;
@@ -666,6 +768,11 @@ define('genCode', ['AST'], function (AST) {
                         .replace(rx.singleQuotes, "\\'")
                         .replace(rx.newlines, "\\\n")
                    + "'";
+    }
+
+    function genCallback(name, code) {
+        var param = rx.eventProperty.test(name) ? name.substring(2) : "__";
+        return "function (" + param + ") { " + code + " }";
     }
 
     function indent(prior) {
