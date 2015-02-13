@@ -1,24 +1,21 @@
-define('preprocess', ['tokenize', 'parse', 'shims'], function (tokenize, parse, shimmed) {
-    return function preprocess(str) {
-        var toks = tokenize(str),
-            ast = parse(toks);
+define('preprocess', ['tokenize', 'parse', 'shims', 'sourcemap'], function (tokenize, parse, shimmed, sourcemap) {
+    return function preprocess(str, opts) {
+        opts = opts || {};
+        opts.symbol = opts.symbol || 'Html';
+        opts.sourcemap = opts.sourcemap || null;
+
+        var toks = tokenize(str, opts),
+            ast = parse(toks, opts);
 
         if (shimmed) ast.shim();
 
-        var out = ast.genCode();
+        var code = ast.genCode(opts),
+            out;
+
+        if (opts.sourcemap === 'extract') out = sourcemap.extractMap(code, str, opts);
+        else if (opts.sourcemap === 'append') out = sourcemap.appendMap(code, str, opts);
+        else out = code;
 
         return out;
     }
 });
-
-/*
-function add(str) {
-    var src = K.DOM.src(str),
-        script = document.createElement('script');
-
-    script.type = 'text/javascript';
-    script.src  = 'data:text/javascript;charset=utf-8,' + escape(src);
-
-    document.body.appendChild(script);
-}
-*/

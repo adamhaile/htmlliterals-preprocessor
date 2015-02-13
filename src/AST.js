@@ -3,14 +3,14 @@ define('AST', [], function () {
         CodeTopLevel: function (segments) {
             this.segments = segments; // [ CodeText | HtmlLiteral ]
         },
-        CodeText: function (text) {
+        CodeText: function (text, loc) {
             this.text = text; // string
+            this.loc = loc; // { line: int, col: int }
         },
         EmbeddedCode: function (segments) {
             this.segments = segments; // [ CodeText | HtmlLiteral ]
         },
-        HtmlLiteral: function(col, nodes) {
-            this.col = col; // integer
+        HtmlLiteral: function(nodes) {
             this.nodes = nodes; // [ HtmlElement | HtmlComment | HtmlText(ws only) | HtmlInsert ]
         },
         HtmlElement: function(beginTag, properties, directives, content, endTag) {
@@ -26,8 +26,7 @@ define('AST', [], function () {
         HtmlComment: function (text) {
             this.text = text; // string
         },
-        HtmlInsert: function (col, code) {
-            this.col = col; // integer
+        HtmlInsert: function (code) {
             this.code = code; // EmbeddedCode
         },
         Property: function (name, code, callback) {

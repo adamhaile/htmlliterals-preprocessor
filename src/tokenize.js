@@ -27,7 +27,7 @@ define('tokenize', [], function () {
         tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|\/\*|\*\/|(?:[^<>@=\/@=()[\]{}"'\n*-]|(?!-->)-|\/(?![>/*])|\*(?!\/)|(?!<\/?\w|<!--)<\/?)+/g,
     };
 
-    return function tokenize(str) {
+    return function tokenize(str, opts) {
         var toks = str.match(rx.tokens);
 
         return toks;
@@ -39,8 +39,7 @@ define('tokenize', [], function () {
             eof     = toks.length === 0,
             tok     = !eof && toks[i],
             line    = 0,
-            col     = 0,
-            segment = { line: line, col: col };
+            col     = 0;
 
         return {
             TOK:      function TOK() { return TOK; },
@@ -52,7 +51,7 @@ define('tokenize', [], function () {
             MATCH:    MATCH,
             WS:       WS,
             SPLIT:    SPLIT,
-            SEGMENT:  SEGMENT,
+            LOC:      LOC,
             MARK:     MARK,
             ROLLBACK: ROLLBACK
         };
@@ -98,11 +97,8 @@ define('tokenize', [], function () {
             }
         }
 
-        function SEGMENT() {
-            return {
-                start: segment,
-                end: segment = { line: line, col: col}
-            };
+        function LOC() {
+            return { line: line, col: col };
         }
 
         function MARK() {

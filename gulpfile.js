@@ -6,6 +6,7 @@ var gulp = require('gulp'),
 gulp.task('dist', function() {
     gulp.src([
         "src/_preamble.js",
+        "src/sourcemap.js",
         "src/tokenize.js",
         "src/AST.js",
         "src/parse.js",

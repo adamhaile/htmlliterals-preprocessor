@@ -20,7 +20,7 @@ define('parse', ['AST'], function (AST) {
         "{": "}"
     };
 
-    return function parse(TOKS) {
+    return function parse(TOKS, opts) {
         var i = 0,
             EOF = TOKS.length === 0,
             TOK = !EOF && TOKS[i],
@@ -31,13 +31,15 @@ define('parse', ['AST'], function (AST) {
 
         function codeTopLevel() {
             var segments = [],
-                text = "";
+                text = "",
+                loc = LOC();
 
             while (!EOF) {
                 if (IS('<') || IS('<!--')) {
-                    if (text) segments.push(new AST.CodeText(text));
+                    if (text) segments.push(new AST.CodeText(text, loc));
                     text = "";
                     segments.push(htmlLiteral());
+                    loc = LOC();
                 } else if (IS('"') || IS("'")) {
                     text += quotedString();
                 } else if (IS('//')) {
@@ -49,7 +51,7 @@ define('parse', ['AST'], function (AST) {
                 }
             }
 
-            if (text) segments.push(new AST.CodeText(text));
+            if (text) segments.push(new AST.CodeText(text, loc));
 
             return new AST.CodeTopLevel(segments);
         }
@@ -57,8 +59,7 @@ define('parse', ['AST'], function (AST) {
         function htmlLiteral() {
             if (NOT('<') && NOT('<!--')) ERR("not at start of html expression");
 
-            var col = COL,
-                nodes = [],
+            var nodes = [],
                 mark,
                 wsText;
 
@@ -82,7 +83,7 @@ define('parse', ['AST'], function (AST) {
                 }
             }
 
-            return new AST.HtmlLiteral(col, nodes);
+            return new AST.HtmlLiteral(nodes);
         }
 
         function htmlElement() {
@@ -183,11 +184,9 @@ define('parse', ['AST'], function (AST) {
         function htmlInsert() {
             if (NOT('@')) ERR("not at start of code insert");
 
-            var col = COL;
-
             NEXT();
 
-            return new AST.HtmlInsert(col, embeddedCode());
+            return new AST.HtmlInsert(embeddedCode());
         }
 
         function property(beginTag, properties) {
@@ -225,16 +224,18 @@ define('parse', ['AST'], function (AST) {
             NEXT();
 
             var name = SPLIT(rx.directiveName),
-                segment,
+                text,
                 segments,
+                loc,
                 callback = false;
 
             if (!name) ERR("directive must have name");
 
             if (IS('(')) {
                 segments = [];
-                segment = balancedParens(segments, "");
-                if (segment) segments.push(segment);
+                loc = LOC();
+                text = balancedParens(segments, "", loc);
+                if (text) segments.push(new AST.CodeText(text, loc));
 
                 return new AST.Directive(name, new AST.EmbeddedCode(segments));
             } else {
@@ -257,7 +258,8 @@ define('parse', ['AST'], function (AST) {
         function embeddedCode() {
             var segments = [],
                 text = "",
-                part;
+                part,
+                loc = LOC();
 
             // consume any initial operators and identifier (!foo)
             if (part = SPLIT(rx.embeddedCodePrefix)) {
@@ -271,7 +273,7 @@ define('parse', ['AST'], function (AST) {
 
             // consume any sets of balanced parentheses
             while (PARENS()) {
-                text = balancedParens(segments, text);
+                text = balancedParens(segments, text, loc);
 
                 // consume interim property chain (.blech.gorp)
                 if (part = SPLIT(rx.embeddedCodeInterim)) {
@@ -284,14 +286,14 @@ define('parse', ['AST'], function (AST) {
                 text += part;
             }
 
-            if (text) segments.push(new AST.CodeText(text));
+            if (text) segments.push(new AST.CodeText(text, loc));
 
             if (segments.length === 0) ERR("not in embedded code");
 
             return new AST.EmbeddedCode(segments);
         }
 
-        function balancedParens(segments, text) {
+        function balancedParens(segments, text, loc) {
             var end = PARENS();
 
             if (end === undefined) ERR("not in parentheses");
@@ -306,11 +308,13 @@ define('parse', ['AST'], function (AST) {
                 } else if (IS('/*')) {
                     text += codeMultiLineComment();
                 } else if (IS("<") || IS('<!--')) {
-                    if (text) segments.push(new AST.CodeText(text));
+                    if (text) segments.push(new AST.CodeText(text, { line: loc.line, col: loc.col }));
                     text = "";
                     segments.push(htmlLiteral());
+                    loc.line = LINE;
+                    loc.col = COL;
                 } else if (IS('(')) {
-                    text = balancedParens(segments, text);
+                    text = balancedParens(segments, text, loc);
                 } else {
                     text += TOK, NEXT();
                 }
@@ -420,6 +424,10 @@ define('parse', ['AST'], function (AST) {
             } else {
                 return null;
             }
+        }
+
+        function LOC() {
+            return { line: LINE, col: COL };
         }
 
         function MARK() {

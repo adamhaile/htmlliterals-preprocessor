@@ -1,4 +1,4 @@
-define('genCode', ['AST'], function (AST) {
+define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
 
     // pre-compiled regular expressions
     var rx = {
@@ -13,14 +13,18 @@ define('genCode', ['AST'], function (AST) {
 
     // genCode
     AST.CodeTopLevel.prototype.genCode   =
-    AST.EmbeddedCode.prototype.genCode   = function () { return concatResults(this.segments, 'genCode'); };
-    AST.CodeText.prototype.genCode       = function () { return this.text; };
+    AST.EmbeddedCode.prototype.genCode   = function (opts) { return concatResults(opts, this.segments, 'genCode'); };
+    AST.CodeText.prototype.genCode       = function (opts) {
+        return (opts.sourcemap ? sourcemap.segmentStart(this.loc) : "")
+            + this.text
+            + (opts.sourcemap ? sourcemap.segmentEnd() : "");
+    };
     var htmlLiteralId = 0; //Math.floor(Math.random() * Math.pow(2, 31));
-    AST.HtmlLiteral.prototype.genCode = function (prior) {
-        var html = concatResults(this.nodes, 'genHtml'),
+    AST.HtmlLiteral.prototype.genCode = function (opts, prior) {
+        var html = concatResults(opts, this.nodes, 'genHtml'),
             nl = "\n" + indent(prior),
-            directives = this.nodes.length > 1 ? genChildDirectives(this.nodes, nl) : this.nodes[0].genDirectives(nl),
-            code = "new Html(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
+            directives = this.nodes.length > 1 ? genChildDirectives(opts, this.nodes, nl) : this.nodes[0].genDirectives(opts, nl),
+            code = "new " + opts.symbol + "(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
 
         if (directives) code += nl + directives + nl;
 
@@ -30,52 +34,53 @@ define('genCode', ['AST'], function (AST) {
     };
 
     // genHtml
-    AST.HtmlElement.prototype.genHtml = function() {
-        return this.beginTag + concatResults(this.content, 'genHtml') + (this.endTag || "");
+    AST.HtmlElement.prototype.genHtml = function(opts) {
+        return this.beginTag + concatResults(opts, this.content, 'genHtml') + (this.endTag || "");
     };
     AST.HtmlComment.prototype.genHtml =
-    AST.HtmlText.prototype.genHtml    = function () { return this.text; };
-    AST.HtmlInsert.prototype.genHtml  = function () { return '<!-- insert -->'; };
+    AST.HtmlText.prototype.genHtml    = function (opts) { return this.text; };
+    AST.HtmlInsert.prototype.genHtml  = function (opts) { return '<!-- insert -->'; };
 
     // genDirectives
-    AST.HtmlElement.prototype.genDirectives = function (nl) {
-        var childDirectives = genChildDirectives(this.content, nl),
-            properties = concatResults(this.properties, 'genDirective', nl),
-            directives = concatResults(this.directives, 'genDirective', nl);
+    AST.HtmlElement.prototype.genDirectives = function (opts, nl) {
+        var childDirectives = genChildDirectives(opts, this.content, nl),
+            properties = concatResults(opts, this.properties, 'genDirective', nl),
+            directives = concatResults(opts, this.directives, 'genDirective', nl);
 
         return properties + (properties && (directives || childDirectives) ? nl : "")
             + directives + (directives && childDirectives ? nl : "")
             + childDirectives;
     };
     AST.HtmlComment.prototype.genDirectives =
-    AST.HtmlText.prototype.genDirectives    = function (nl) { return null; };
-    AST.HtmlInsert.prototype.genDirectives  = function (nl) {
-        return new AST.AttrStyleDirective('insert', [], this.code).genDirective();
+    AST.HtmlText.prototype.genDirectives    = function (opts, nl) { return null; };
+    AST.HtmlInsert.prototype.genDirectives  = function (opts, nl) {
+        return new AST.AttrStyleDirective('insert', [], this.code, false).genDirective(opts);
     }
 
     // genDirective
-    AST.Property.prototype.genDirective = function () {
-        var code = this.code.genCode();
+    AST.Property.prototype.genDirective = function (opts) {
+        var code = this.code.genCode(opts);
         if (this.callback) code = genCallback(this.name, code);
         return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
-    AST.Directive.prototype.genDirective = function () {
-        return "." + this.name + "(function (__) { __" + this.code.genCode() + "; })";
+    AST.Directive.prototype.genDirective = function (opts) {
+        return "." + this.name + "(function (__) { __" + this.code.genCode(opts) + "; })";
     };
-    AST.AttrStyleDirective.prototype.genDirective = function () {
+    AST.AttrStyleDirective.prototype.genDirective = function (opts) {
         var code = "." + this.name + "(function (__) { __(";
 
         for (var i = 0; i < this.params.length; i++)
             code += codeStr(this.params[i]) + ", ";
 
-        code += this.callback ? genCallback(this.name, this.code.genCode()) : this.code.genCode();
+        code += this.callback ? genCallback(this.name, this.code.genCode(opts))
+                              : this.code.genCode(opts);
 
         code += "); })";
 
         return code;
     };
 
-    function genChildDirectives(childNodes, nl) {
+    function genChildDirectives(opts, childNodes, nl) {
         var indices = [],
             directives = [],
             identifiers = [],
@@ -86,7 +91,7 @@ define('genCode', ['AST'], function (AST) {
             result = "";
 
         for (i = 0; i < childNodes.length; i++) {
-            directive = childNodes[i].genDirectives(ccnl);
+            directive = childNodes[i].genDirectives(opts, ccnl);
             if (directive) {
                 indices.push(i);
                 identifiers.push(childIdentifier(childNodes[i]));
@@ -107,12 +112,12 @@ define('genCode', ['AST'], function (AST) {
         return result;
     }
 
-    function concatResults(children, method, sep) {
+    function concatResults(opts, children, method, sep) {
         var result = "", i;
 
         for (i = 0; i < children.length; i++) {
             if (i && sep) result += sep;
-            result += children[i][method](result);
+            result += children[i][method](opts, result);
         }
 
         return result;

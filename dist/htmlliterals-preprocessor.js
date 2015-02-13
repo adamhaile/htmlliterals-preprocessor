@@ -20,6 +20,135 @@
 })(function (define) {
     "use strict";
 
+define('sourcemap', [], function () {
+    var rx = {
+            locs: /(\n)|(\u0000(\d+),(\d+)\u0000)|(\u0000\u0000)/g
+        },
+        vlqlast = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
+        vlqcont = "ghijklmnopqrstuvwxyz0123456789+/";
+
+    return {
+        segmentStart: segmentStart,
+        segmentEnd:   segmentEnd,
+        extractMap:   extractMap,
+        appendMap:    appendMap
+    };
+
+    function segmentStart(loc) {
+        return "\u0000" + loc.line + "," + loc.col + "\u0000";
+    }
+
+    function segmentEnd() {
+        return "\u0000\u0000";
+    }
+
+    function extractMappings(embedded) {
+        var mappings = "",
+            pgcol = 0,
+            psline = 0,
+            pscol = 0,
+            insegment = false,
+            linestart = 0,
+            linecont = false;
+
+        var src = embedded.replace(rx.locs, function (_, nl, start, line, col, end, offset) {
+            if (nl) {
+                mappings += ";";
+
+                if (insegment) {
+                    mappings += "AA" + vlq(1) + vlq(0 - pscol);
+                    psline++;
+                    pscol = 0;
+                    linecont = true;
+                } else {
+                    linecont = false;
+                }
+
+                linestart = offset + nl.length;
+
+                pgcol = 0;
+
+                return nl;
+            } else if (start) {
+                var gcol = offset - linestart;
+                line = parseInt(line);
+                col = parseInt(col);
+
+                mappings += (linecont ? "," : "")
+                          + vlq(gcol - pgcol)
+                          + "A" // only one file
+                          + vlq(line - psline)
+                          + vlq(col - pscol);
+
+                insegment = true;
+                linecont = true;
+
+                pgcol = gcol;
+                psline = line;
+                pscol = col;
+
+                return "";
+            } else if (end) {
+                insegment = false;
+                return "";
+            }
+        });
+
+        return {
+            src: src,
+            mappings: mappings
+        };
+    }
+
+    function extractMap(src, original, opts) {
+        var extract = extractMappings(src),
+            map = createMap(extract.mappings, original);
+
+        return {
+            src: extract.src,
+            map: map
+        };
+    }
+
+    function createMap(mappings, original) {
+        return {
+            version       : 3,
+            file          : 'out.js',
+            sources       : [ 'in.js' ],
+            sourcesContent: [ original ],
+            names         : [],
+            mappings      : mappings
+        };
+    }
+
+    function appendMap(src, original, opts) {
+        var extract = extractMap(src, original),
+            appended = extract.src
+              + "\n//# sourceMappingURL=data:"
+              + escape(JSON.stringify(extract.map));
+
+        return appended;
+    }
+
+    function vlq(num) {
+        var str = "", i;
+
+        // convert num sign representation from 2s complement to sign bit in lsd
+        num = num < 0 ? (-num << 1) + 1 : num << 1 + 0;
+        // convert num to base 32 number
+        num = num.toString(32);
+
+        // convert base32 digits of num to vlq continuation digits in reverse order
+        for (i = num.length - 1; i > 0; i--)
+            str += vlqcont[parseInt(num[i], 32)];
+
+        // add final vlqlast digit
+        str += vlqlast[parseInt(num[0], 32)];
+
+        return str;
+    }
+});
+
 define('tokenize', [], function () {
     /// tokens:
     /// < (followed by \w)
@@ -49,7 +178,7 @@ define('tokenize', [], function () {
         tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|\/\*|\*\/|(?:[^<>@=\/@=()[\]{}"'\n*-]|(?!-->)-|\/(?![>/*])|\*(?!\/)|(?!<\/?\w|<!--)<\/?)+/g,
     };
 
-    return function tokenize(str) {
+    return function tokenize(str, opts) {
         var toks = str.match(rx.tokens);
 
         return toks;
@@ -61,8 +190,7 @@ define('tokenize', [], function () {
             eof     = toks.length === 0,
             tok     = !eof && toks[i],
             line    = 0,
-            col     = 0,
-            segment = { line: line, col: col };
+            col     = 0;
 
         return {
             TOK:      function TOK() { return TOK; },
@@ -74,7 +202,7 @@ define('tokenize', [], function () {
             MATCH:    MATCH,
             WS:       WS,
             SPLIT:    SPLIT,
-            SEGMENT:  SEGMENT,
+            LOC:      LOC,
             MARK:     MARK,
             ROLLBACK: ROLLBACK
         };
@@ -120,11 +248,8 @@ define('tokenize', [], function () {
             }
         }
 
-        function SEGMENT() {
-            return {
-                start: segment,
-                end: segment = { line: line, col: col}
-            };
+        function LOC() {
+            return { line: line, col: col };
         }
 
         function MARK() {
@@ -154,14 +279,14 @@ define('AST', [], function () {
         CodeTopLevel: function (segments) {
             this.segments = segments; // [ CodeText | HtmlLiteral ]
         },
-        CodeText: function (text) {
+        CodeText: function (text, loc) {
             this.text = text; // string
+            this.loc = loc; // { line: int, col: int }
         },
         EmbeddedCode: function (segments) {
             this.segments = segments; // [ CodeText | HtmlLiteral ]
         },
-        HtmlLiteral: function(col, nodes) {
-            this.col = col; // integer
+        HtmlLiteral: function(nodes) {
             this.nodes = nodes; // [ HtmlElement | HtmlComment | HtmlText(ws only) | HtmlInsert ]
         },
         HtmlElement: function(beginTag, properties, directives, content, endTag) {
@@ -177,8 +302,7 @@ define('AST', [], function () {
         HtmlComment: function (text) {
             this.text = text; // string
         },
-        HtmlInsert: function (col, code) {
-            this.col = col; // integer
+        HtmlInsert: function (code) {
             this.code = code; // EmbeddedCode
         },
         Property: function (name, code, callback) {
@@ -221,7 +345,7 @@ define('parse', ['AST'], function (AST) {
         "{": "}"
     };
 
-    return function parse(TOKS) {
+    return function parse(TOKS, opts) {
         var i = 0,
             EOF = TOKS.length === 0,
             TOK = !EOF && TOKS[i],
@@ -232,13 +356,15 @@ define('parse', ['AST'], function (AST) {
 
         function codeTopLevel() {
             var segments = [],
-                text = "";
+                text = "",
+                loc = LOC();
 
             while (!EOF) {
                 if (IS('<') || IS('<!--')) {
-                    if (text) segments.push(new AST.CodeText(text));
+                    if (text) segments.push(new AST.CodeText(text, loc));
                     text = "";
                     segments.push(htmlLiteral());
+                    loc = LOC();
                 } else if (IS('"') || IS("'")) {
                     text += quotedString();
                 } else if (IS('//')) {
@@ -250,7 +376,7 @@ define('parse', ['AST'], function (AST) {
                 }
             }
 
-            if (text) segments.push(new AST.CodeText(text));
+            if (text) segments.push(new AST.CodeText(text, loc));
 
             return new AST.CodeTopLevel(segments);
         }
@@ -258,8 +384,7 @@ define('parse', ['AST'], function (AST) {
         function htmlLiteral() {
             if (NOT('<') && NOT('<!--')) ERR("not at start of html expression");
 
-            var col = COL,
-                nodes = [],
+            var nodes = [],
                 mark,
                 wsText;
 
@@ -283,7 +408,7 @@ define('parse', ['AST'], function (AST) {
                 }
             }
 
-            return new AST.HtmlLiteral(col, nodes);
+            return new AST.HtmlLiteral(nodes);
         }
 
         function htmlElement() {
@@ -384,11 +509,9 @@ define('parse', ['AST'], function (AST) {
         function htmlInsert() {
             if (NOT('@')) ERR("not at start of code insert");
 
-            var col = COL;
-
             NEXT();
 
-            return new AST.HtmlInsert(col, embeddedCode());
+            return new AST.HtmlInsert(embeddedCode());
         }
 
         function property(beginTag, properties) {
@@ -426,16 +549,18 @@ define('parse', ['AST'], function (AST) {
             NEXT();
 
             var name = SPLIT(rx.directiveName),
-                segment,
+                text,
                 segments,
+                loc,
                 callback = false;
 
             if (!name) ERR("directive must have name");
 
             if (IS('(')) {
                 segments = [];
-                segment = balancedParens(segments, "");
-                if (segment) segments.push(segment);
+                loc = LOC();
+                text = balancedParens(segments, "", loc);
+                if (text) segments.push(new AST.CodeText(text, loc));
 
                 return new AST.Directive(name, new AST.EmbeddedCode(segments));
             } else {
@@ -458,7 +583,8 @@ define('parse', ['AST'], function (AST) {
         function embeddedCode() {
             var segments = [],
                 text = "",
-                part;
+                part,
+                loc = LOC();
 
             // consume any initial operators and identifier (!foo)
             if (part = SPLIT(rx.embeddedCodePrefix)) {
@@ -472,7 +598,7 @@ define('parse', ['AST'], function (AST) {
 
             // consume any sets of balanced parentheses
             while (PARENS()) {
-                text = balancedParens(segments, text);
+                text = balancedParens(segments, text, loc);
 
                 // consume interim property chain (.blech.gorp)
                 if (part = SPLIT(rx.embeddedCodeInterim)) {
@@ -485,14 +611,14 @@ define('parse', ['AST'], function (AST) {
                 text += part;
             }
 
-            if (text) segments.push(new AST.CodeText(text));
+            if (text) segments.push(new AST.CodeText(text, loc));
 
             if (segments.length === 0) ERR("not in embedded code");
 
             return new AST.EmbeddedCode(segments);
         }
 
-        function balancedParens(segments, text) {
+        function balancedParens(segments, text, loc) {
             var end = PARENS();
 
             if (end === undefined) ERR("not in parentheses");
@@ -507,11 +633,13 @@ define('parse', ['AST'], function (AST) {
                 } else if (IS('/*')) {
                     text += codeMultiLineComment();
                 } else if (IS("<") || IS('<!--')) {
-                    if (text) segments.push(new AST.CodeText(text));
+                    if (text) segments.push(new AST.CodeText(text, { line: loc.line, col: loc.col }));
                     text = "";
                     segments.push(htmlLiteral());
+                    loc.line = LINE;
+                    loc.col = COL;
                 } else if (IS('(')) {
-                    text = balancedParens(segments, text);
+                    text = balancedParens(segments, text, loc);
                 } else {
                     text += TOK, NEXT();
                 }
@@ -623,6 +751,10 @@ define('parse', ['AST'], function (AST) {
             }
         }
 
+        function LOC() {
+            return { line: LINE, col: COL };
+        }
+
         function MARK() {
             return {
                 TOK: TOK,
@@ -643,7 +775,7 @@ define('parse', ['AST'], function (AST) {
     }
 });
 
-define('genCode', ['AST'], function (AST) {
+define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
 
     // pre-compiled regular expressions
     var rx = {
@@ -658,14 +790,18 @@ define('genCode', ['AST'], function (AST) {
 
     // genCode
     AST.CodeTopLevel.prototype.genCode   =
-    AST.EmbeddedCode.prototype.genCode   = function () { return concatResults(this.segments, 'genCode'); };
-    AST.CodeText.prototype.genCode       = function () { return this.text; };
+    AST.EmbeddedCode.prototype.genCode   = function (opts) { return concatResults(opts, this.segments, 'genCode'); };
+    AST.CodeText.prototype.genCode       = function (opts) {
+        return (opts.sourcemap ? sourcemap.segmentStart(this.loc) : "")
+            + this.text
+            + (opts.sourcemap ? sourcemap.segmentEnd() : "");
+    };
     var htmlLiteralId = 0; //Math.floor(Math.random() * Math.pow(2, 31));
-    AST.HtmlLiteral.prototype.genCode = function (prior) {
-        var html = concatResults(this.nodes, 'genHtml'),
+    AST.HtmlLiteral.prototype.genCode = function (opts, prior) {
+        var html = concatResults(opts, this.nodes, 'genHtml'),
             nl = "\n" + indent(prior),
-            directives = this.nodes.length > 1 ? genChildDirectives(this.nodes, nl) : this.nodes[0].genDirectives(nl),
-            code = "new Html(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
+            directives = this.nodes.length > 1 ? genChildDirectives(opts, this.nodes, nl) : this.nodes[0].genDirectives(opts, nl),
+            code = "new " + opts.symbol + "(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
 
         if (directives) code += nl + directives + nl;
 
@@ -675,52 +811,53 @@ define('genCode', ['AST'], function (AST) {
     };
 
     // genHtml
-    AST.HtmlElement.prototype.genHtml = function() {
-        return this.beginTag + concatResults(this.content, 'genHtml') + (this.endTag || "");
+    AST.HtmlElement.prototype.genHtml = function(opts) {
+        return this.beginTag + concatResults(opts, this.content, 'genHtml') + (this.endTag || "");
     };
     AST.HtmlComment.prototype.genHtml =
-    AST.HtmlText.prototype.genHtml    = function () { return this.text; };
-    AST.HtmlInsert.prototype.genHtml  = function () { return '<!-- insert -->'; };
+    AST.HtmlText.prototype.genHtml    = function (opts) { return this.text; };
+    AST.HtmlInsert.prototype.genHtml  = function (opts) { return '<!-- insert -->'; };
 
     // genDirectives
-    AST.HtmlElement.prototype.genDirectives = function (nl) {
-        var childDirectives = genChildDirectives(this.content, nl),
-            properties = concatResults(this.properties, 'genDirective', nl),
-            directives = concatResults(this.directives, 'genDirective', nl);
+    AST.HtmlElement.prototype.genDirectives = function (opts, nl) {
+        var childDirectives = genChildDirectives(opts, this.content, nl),
+            properties = concatResults(opts, this.properties, 'genDirective', nl),
+            directives = concatResults(opts, this.directives, 'genDirective', nl);
 
         return properties + (properties && (directives || childDirectives) ? nl : "")
             + directives + (directives && childDirectives ? nl : "")
             + childDirectives;
     };
     AST.HtmlComment.prototype.genDirectives =
-    AST.HtmlText.prototype.genDirectives    = function (nl) { return null; };
-    AST.HtmlInsert.prototype.genDirectives  = function (nl) {
-        return new AST.AttrStyleDirective('insert', [], this.code).genDirective();
+    AST.HtmlText.prototype.genDirectives    = function (opts, nl) { return null; };
+    AST.HtmlInsert.prototype.genDirectives  = function (opts, nl) {
+        return new AST.AttrStyleDirective('insert', [], this.code, false).genDirective(opts);
     }
 
     // genDirective
-    AST.Property.prototype.genDirective = function () {
-        var code = this.code.genCode();
+    AST.Property.prototype.genDirective = function (opts) {
+        var code = this.code.genCode(opts);
         if (this.callback) code = genCallback(this.name, code);
         return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
-    AST.Directive.prototype.genDirective = function () {
-        return "." + this.name + "(function (__) { __" + this.code.genCode() + "; })";
+    AST.Directive.prototype.genDirective = function (opts) {
+        return "." + this.name + "(function (__) { __" + this.code.genCode(opts) + "; })";
     };
-    AST.AttrStyleDirective.prototype.genDirective = function () {
+    AST.AttrStyleDirective.prototype.genDirective = function (opts) {
         var code = "." + this.name + "(function (__) { __(";
 
         for (var i = 0; i < this.params.length; i++)
             code += codeStr(this.params[i]) + ", ";
 
-        code += this.callback ? genCallback(this.name, this.code.genCode()) : this.code.genCode();
+        code += this.callback ? genCallback(this.name, this.code.genCode(opts))
+                              : this.code.genCode(opts);
 
         code += "); })";
 
         return code;
     };
 
-    function genChildDirectives(childNodes, nl) {
+    function genChildDirectives(opts, childNodes, nl) {
         var indices = [],
             directives = [],
             identifiers = [],
@@ -731,7 +868,7 @@ define('genCode', ['AST'], function (AST) {
             result = "";
 
         for (i = 0; i < childNodes.length; i++) {
-            directive = childNodes[i].genDirectives(ccnl);
+            directive = childNodes[i].genDirectives(opts, ccnl);
             if (directive) {
                 indices.push(i);
                 identifiers.push(childIdentifier(childNodes[i]));
@@ -752,12 +889,12 @@ define('genCode', ['AST'], function (AST) {
         return result;
     }
 
-    function concatResults(children, method, sep) {
+    function concatResults(opts, children, method, sep) {
         var result = "", i;
 
         for (i = 0; i < children.length; i++) {
             if (i && sep) result += sep;
-            result += children[i][method](result);
+            result += children[i][method](opts, result);
         }
 
         return result;
@@ -870,29 +1007,26 @@ define('shims', ['AST'], function (AST) {
 
 });
 
-define('preprocess', ['tokenize', 'parse', 'shims'], function (tokenize, parse, shimmed) {
-    return function preprocess(str) {
-        var toks = tokenize(str),
-            ast = parse(toks);
+define('preprocess', ['tokenize', 'parse', 'shims', 'sourcemap'], function (tokenize, parse, shimmed, sourcemap) {
+    return function preprocess(str, opts) {
+        opts = opts || {};
+        opts.symbol = opts.symbol || 'Html';
+        opts.sourcemap = opts.sourcemap || null;
+
+        var toks = tokenize(str, opts),
+            ast = parse(toks, opts);
 
         if (shimmed) ast.shim();
 
-        var out = ast.genCode();
+        var code = ast.genCode(opts),
+            out;
+
+        if (opts.sourcemap === 'extract') out = sourcemap.extractMap(code, str, opts);
+        else if (opts.sourcemap === 'append') out = sourcemap.appendMap(code, str, opts);
+        else out = code;
 
         return out;
     }
 });
-
-/*
-function add(str) {
-    var src = K.DOM.src(str),
-        script = document.createElement('script');
-
-    script.type = 'text/javascript';
-    script.src  = 'data:text/javascript;charset=utf-8,' + escape(src);
-
-    document.body.appendChild(script);
-}
-*/
 
 });
