@@ -329,7 +329,7 @@ define('parse', ['AST'], function (AST) {
     var rx = {
         propertyLeftSide   : /\s(\S+)\s*=>?\s*$/,
         embeddedCodePrefix : /^[+\-!~]*[a-zA-Z_$][a-zA-Z_$0-9]*/, // prefix unary operators + identifier
-        embeddedCodeInterim: /^(?:\.[a-zA-Z_$][a-zA-Z_$0-9]+)+/, // property chain, like .bar.blech
+        embeddedCodeInterim: /^(?:\.[a-zA-Z_$][a-zA-Z_$0-9]*)+/, // property chain, like .bar.blech
         embeddedCodeSuffix : /^\+\+|--/, // suffix unary operators
         directiveName      : /^[a-zA-Z_$][a-zA-Z_$0-9]*(:[^\s:=]*)*/, // like "foo:bar:blech"
         stringEscapedEnd   : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
@@ -350,7 +350,8 @@ define('parse', ['AST'], function (AST) {
             EOF = TOKS.length === 0,
             TOK = !EOF && TOKS[i],
             LINE = 0,
-            COL = 0;
+            COL = 0,
+            POS = 0;
 
         return codeTopLevel();
 
@@ -414,7 +415,8 @@ define('parse', ['AST'], function (AST) {
         function htmlElement() {
             if (NOT('<')) ERR("not at start of html element");
 
-            var beginTag = "",
+            var start = LOC(),
+                beginTag = "",
                 properties = [],
                 directives = [],
                 content = [],
@@ -434,7 +436,7 @@ define('parse', ['AST'], function (AST) {
                 }
             }
 
-            if (EOF) ERR("unterminated start node");
+            if (EOF) ERR("unterminated start node", start);
 
             hasContent = IS('>');
 
@@ -581,7 +583,8 @@ define('parse', ['AST'], function (AST) {
         }
 
         function embeddedCode() {
-            var segments = [],
+            var start = LOC(),
+                segments = [],
                 text = "",
                 part,
                 loc = LOC();
@@ -613,7 +616,7 @@ define('parse', ['AST'], function (AST) {
 
             if (text) segments.push(new AST.CodeText(text, loc));
 
-            if (segments.length === 0) ERR("not in embedded code");
+            if (segments.length === 0) ERR("not in embedded code", start);
 
             return new AST.EmbeddedCode(segments);
         }
@@ -704,15 +707,16 @@ define('parse', ['AST'], function (AST) {
 
         // token stream ops
         function NEXT() {
-            if (TOK === "\n") LINE++, COL = 0;
-            else if (TOK) COL += TOK.length;
+            if (TOK === "\n") LINE++, COL = 0, POS++;
+            else if (TOK) COL += TOK.length, POS += TOK.length;
 
             if (++i >= TOKS.length) EOF = true, TOK = null;
             else TOK = TOKS[i];
         }
 
-        function ERR(msg) {
-            throw new Error(msg);
+        function ERR(msg, loc) {
+            var frag = loc ? " at line " + loc.line + " col " + loc.col + ": ``" + TOKS.join('').substr(loc.pos, 30).replace("\n", "") + "''" : "";
+            throw new Error(msg + frag);
         }
 
         function IS(t) {
@@ -743,6 +747,7 @@ define('parse', ['AST'], function (AST) {
             var m = MATCHES(rx);
             if (m && (m = m[0])) {
                 COL += m.length;
+                POS += m.length;
                 TOK = TOK.substring(m.length);
                 if (TOK === "") NEXT();
                 return m;
@@ -752,7 +757,7 @@ define('parse', ['AST'], function (AST) {
         }
 
         function LOC() {
-            return { line: LINE, col: COL };
+            return { line: LINE, col: COL, pos: POS };
         }
 
         function MARK() {
