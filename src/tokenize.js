@@ -7,7 +7,7 @@ define('tokenize', [], function () {
     /// <!--
     /// -->
     /// @
-    /// = (followed by \s*[^"'])
+    /// =
     /// )
     /// (
     /// [

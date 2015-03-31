@@ -158,7 +158,7 @@ define('tokenize', [], function () {
     /// <!--
     /// -->
     /// @
-    /// = (followed by \s*[^"'])
+    /// =
     /// )
     /// (
     /// [
@@ -361,7 +361,7 @@ define('parse', ['AST'], function (AST) {
                 loc = LOC();
 
             while (!EOF) {
-                if (IS('<') || IS('<!--')) {
+                if (IS('<') || IS('<!--') || IS('@')) {
                     if (text) segments.push(new AST.CodeText(text, loc));
                     text = "";
                     segments.push(htmlLiteral());
@@ -383,7 +383,7 @@ define('parse', ['AST'], function (AST) {
         }
 
         function htmlLiteral() {
-            if (NOT('<') && NOT('<!--')) ERR("not at start of html expression");
+            if (NOT('<') && NOT('<!--') && NOT('@')) ERR("not at start of html expression");
 
             var nodes = [],
                 mark,
