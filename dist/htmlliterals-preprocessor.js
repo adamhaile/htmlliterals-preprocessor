@@ -184,94 +184,6 @@ define('tokenize', [], function () {
         return toks;
         //return TokenStream(toks);
     }
-
-    function TokenStream(toks) {
-        var i       = 0,
-            eof     = toks.length === 0,
-            tok     = !eof && toks[i],
-            line    = 0,
-            col     = 0;
-
-        return {
-            TOK:      function TOK() { return TOK; },
-            EOF:      function EOF() { return EOF; },
-            NEXT:     NEXT,
-            ERR:      ERR,
-            IS:       IS,
-            NOT:      NOT,
-            MATCH:    MATCH,
-            WS:       WS,
-            SPLIT:    SPLIT,
-            LOC:      LOC,
-            MARK:     MARK,
-            ROLLBACK: ROLLBACK
-        };
-
-        // token stream ops
-        function NEXT() {
-            if (tok === "\n") line++, col = 0;
-            else if (tok) col += tok.length;
-
-            if (++i >= toks.length) eof = true, tok = null;
-            else tok = toks[i];
-        }
-
-        function ERR(msg) {
-            throw new Error(msg);
-        }
-
-        function IS(t) {
-            return tok === t;
-        }
-
-        function NOT(t) {
-            return tok !== t;
-        }
-
-        function MATCH(rx) {
-            return rx.test(tok);
-        }
-
-        function WS() {
-            return !!MATCH(rx.ws);
-        }
-
-        function SPLIT(rx) {
-            var m = rx.exec(tok);
-            if (m && (m = m[0])) {
-                col += m.length;
-                tok = tok.substring(m.length);
-                if (tok === "") NEXT();
-                return m;
-            } else {
-                return null;
-            }
-        }
-
-        function LOC() {
-            return { line: line, col: col };
-        }
-
-        function MARK() {
-            return {
-                tok:     tok,
-                i:       i,
-                eof:     eof,
-                line:    line,
-                col:     col,
-                segment: segment
-            };
-        }
-
-        function ROLLBACK(mark) {
-            tok     = mark.tok;
-            i       = mark.i;
-            eof     = mark.eof;
-            line    = mark.line;
-            col     = mark.col;
-            segment = mark.segment;
-        }
-    }
 });
 
 define('AST', [], function () {
@@ -328,13 +240,11 @@ define('parse', ['AST'], function (AST) {
     // pre-compiled regular expressions
     var rx = {
         propertyLeftSide   : /\s(\S+)\s*=>?\s*$/,
-        embeddedCodePrefix : /^[+\-!~]*[a-zA-Z_$][a-zA-Z_$0-9]*/, // prefix unary operators + identifier
-        embeddedCodeInterim: /^(?:\.[a-zA-Z_$][a-zA-Z_$0-9]*)+/, // property chain, like .bar.blech
-        embeddedCodeSuffix : /^\+\+|--/, // suffix unary operators
         directiveName      : /^[a-zA-Z_$][a-zA-Z_$0-9]*(:[^\s:=]*)*/, // like "foo:bar:blech"
         stringEscapedEnd   : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
         ws                 : /^\s*$/,
         leadingWs          : /^\s+/,
+        leadingNonWs       : /^\S+/,
         tagTrailingWs      : /\s+(?=\/?>$)/,
         emptyLines         : /\n\s+(?=\n)/g
     };
@@ -589,29 +499,15 @@ define('parse', ['AST'], function (AST) {
                 part,
                 loc = LOC();
 
-            // consume any initial operators and identifier (!foo)
-            if (part = SPLIT(rx.embeddedCodePrefix)) {
-                text += part;
-
-                // consume any property chain (.bar.blech)
-                if (part = SPLIT(rx.embeddedCodeInterim)) {
-                    text += part;
+            // consume source text up to the first top-level angle bracket, @ or whitespace
+            while(!EOF && !MATCH(rx.leadingWs) && NOT('<') && NOT('</') && NOT('<!--') && NOT('>') && NOT('/>') && NOT('@')) {
+                if (PARENS()) {
+                    text = balancedParens(segments, text, loc);
+                } else if (IS("'") || IS('"')) {
+                    text += quotedString();
+                } else {
+                    text += SPLIT(rx.leadingNonWs);
                 }
-            }
-
-            // consume any sets of balanced parentheses
-            while (PARENS()) {
-                text = balancedParens(segments, text, loc);
-
-                // consume interim property chain (.blech.gorp)
-                if (part = SPLIT(rx.embeddedCodeInterim)) {
-                    text += part;
-                }
-            }
-
-            // consume any operator suffix (++, --)
-            if (part = SPLIT(rx.embeddedCodeSuffix)) {
-                text += part;
             }
 
             if (text) segments.push(new AST.CodeText(text, loc));
@@ -635,13 +531,13 @@ define('parse', ['AST'], function (AST) {
                     text += codeSingleLineComment();
                 } else if (IS('/*')) {
                     text += codeMultiLineComment();
-                } else if (IS("<") || IS('<!--')) {
+                } else if (IS("<") || IS('<!--') || IS('@')) {
                     if (text) segments.push(new AST.CodeText(text, { line: loc.line, col: loc.col }));
                     text = "";
                     segments.push(htmlLiteral());
                     loc.line = LINE;
                     loc.col = COL;
-                } else if (IS('(')) {
+                } else if (PARENS()) {
                     text = balancedParens(segments, text, loc);
                 } else {
                     text += TOK, NEXT();
