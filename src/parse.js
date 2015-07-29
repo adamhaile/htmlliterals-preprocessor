@@ -7,7 +7,8 @@ define('parse', ['AST'], function (AST) {
         stringEscapedEnd   : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
         ws                 : /^\s*$/,
         leadingWs          : /^\s+/,
-        leadingNonWs       : /^\S+/,
+        codeTerminator     : /^[\s<>/,;)\]}]/,
+        codeContinuation   : /^[^\s<>/,;)\]}]+/,
         tagTrailingWs      : /\s+(?=\/?>$)/,
         emptyLines         : /\n\s+(?=\n)/g
     };
@@ -262,14 +263,14 @@ define('parse', ['AST'], function (AST) {
                 part,
                 loc = LOC();
 
-            // consume source text up to the first top-level angle bracket, @ or whitespace
-            while(!EOF && !MATCH(rx.leadingWs) && NOT('<') && NOT('</') && NOT('<!--') && NOT('>') && NOT('/>') && NOT('@')) {
+            // consume source text up to the first top-level terminating character
+            while(!EOF && !MATCH(rx.codeTerminator)) {
                 if (PARENS()) {
                     text = balancedParens(segments, text, loc);
                 } else if (IS("'") || IS('"')) {
                     text += quotedString();
                 } else {
-                    text += SPLIT(rx.leadingNonWs);
+                    text += SPLIT(rx.codeContinuation);
                 }
             }
 
