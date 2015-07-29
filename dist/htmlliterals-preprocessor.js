@@ -244,7 +244,8 @@ define('parse', ['AST'], function (AST) {
         stringEscapedEnd   : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
         ws                 : /^\s*$/,
         leadingWs          : /^\s+/,
-        leadingNonWs       : /^\S+/,
+        codeTerminator     : /^[\s<>/,;)\]}]/,
+        codeContinuation   : /^[^\s<>/,;)\]}]+/,
         tagTrailingWs      : /\s+(?=\/?>$)/,
         emptyLines         : /\n\s+(?=\n)/g
     };
@@ -499,14 +500,14 @@ define('parse', ['AST'], function (AST) {
                 part,
                 loc = LOC();
 
-            // consume source text up to the first top-level angle bracket, @ or whitespace
-            while(!EOF && !MATCH(rx.leadingWs) && NOT('<') && NOT('</') && NOT('<!--') && NOT('>') && NOT('/>') && NOT('@')) {
+            // consume source text up to the first top-level terminating character
+            while(!EOF && !MATCH(rx.codeTerminator)) {
                 if (PARENS()) {
                     text = balancedParens(segments, text, loc);
                 } else if (IS("'") || IS('"')) {
                     text += quotedString();
                 } else {
-                    text += SPLIT(rx.leadingNonWs);
+                    text += SPLIT(rx.codeContinuation);
                 }
             }
 
@@ -725,9 +726,12 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
             properties = concatResults(opts, this.properties, 'genDirective', nl),
             directives = concatResults(opts, this.directives, 'genDirective', nl);
 
-        return properties + (properties && (directives || childDirectives) ? nl : "")
-            + directives + (directives && childDirectives ? nl : "")
-            + childDirectives;
+        //return properties + (properties && (directives || childDirectives) ? nl : "")
+        //    + directives + (directives && childDirectives ? nl : "")
+        //    + childDirectives;
+        return childDirectives + (childDirectives && (properties || directives) ? nl : "")
+            + properties + (properties && directives ? nl : "")
+            + directives;
     };
     AST.HtmlComment.prototype.genDirectives =
     AST.HtmlText.prototype.genDirectives    = function (opts, nl) { return null; };
@@ -831,6 +835,9 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
 
 // Cross-browser compatibility shims
 define('shims', ['AST'], function (AST) {
+
+    // can only probe for shims if we're running in a browser
+    if (!this || !this.document) return false;
 
     var shimmed = false;
 
