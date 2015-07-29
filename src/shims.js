@@ -1,6 +1,9 @@
 // Cross-browser compatibility shims
 define('shims', ['AST'], function (AST) {
 
+    // can only probe for shims if we're running in a browser
+    if (!this || !this.document) return false;
+
     var shimmed = false;
 
     // add base shim methods that visit AST
