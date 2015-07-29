@@ -47,9 +47,12 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
             properties = concatResults(opts, this.properties, 'genDirective', nl),
             directives = concatResults(opts, this.directives, 'genDirective', nl);
 
-        return properties + (properties && (directives || childDirectives) ? nl : "")
-            + directives + (directives && childDirectives ? nl : "")
-            + childDirectives;
+        //return properties + (properties && (directives || childDirectives) ? nl : "")
+        //    + directives + (directives && childDirectives ? nl : "")
+        //    + childDirectives;
+        return childDirectives + (childDirectives && (properties || directives) ? nl : "")
+            + properties + (properties && directives ? nl : "")
+            + directives;
     };
     AST.HtmlComment.prototype.genDirectives =
     AST.HtmlText.prototype.genDirectives    = function (opts, nl) { return null; };
