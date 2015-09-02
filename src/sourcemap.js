@@ -103,7 +103,7 @@ define('sourcemap', [], function () {
         var extract = extractMap(src, original),
             appended = extract.src
               + "\n//# sourceMappingURL=data:"
-              + escape(JSON.stringify(extract.map));
+              + encodeURIComponent(JSON.stringify(extract.map));
 
         return appended;
     }

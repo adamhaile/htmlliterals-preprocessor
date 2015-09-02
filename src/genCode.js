@@ -2,7 +2,6 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
 
     // pre-compiled regular expressions
     var rx = {
-        eventProperty      : /^on/,
         backslashes        : /\\/g,
         newlines           : /\n/g,
         singleQuotes       : /'/g,
@@ -19,7 +18,7 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
             + this.text
             + (opts.sourcemap ? sourcemap.segmentEnd() : "");
     };
-    var htmlLiteralId = 0; //Math.floor(Math.random() * Math.pow(2, 31));
+    var htmlLiteralId = 0;
     AST.HtmlLiteral.prototype.genCode = function (opts, prior) {
         var html = concatResults(opts, this.nodes, 'genHtml'),
             nl = "\n" + indent(prior),
@@ -45,42 +44,25 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
     AST.HtmlElement.prototype.genDirectives = function (opts, nl) {
         var childDirectives = genChildDirectives(opts, this.content, nl),
             properties = concatResults(opts, this.properties, 'genDirective', nl),
-            directives = concatResults(opts, this.directives, 'genDirective', nl);
+            mixins = concatResults(opts, this.mixins, 'genDirective', nl);
 
-        //return properties + (properties && (directives || childDirectives) ? nl : "")
-        //    + directives + (directives && childDirectives ? nl : "")
-        //    + childDirectives;
-        return childDirectives + (childDirectives && (properties || directives) ? nl : "")
-            + properties + (properties && directives ? nl : "")
-            + directives;
+        return childDirectives + (childDirectives && (properties || mixins) ? nl : "")
+            + properties + (properties && mixins ? nl : "")
+            + mixins;
     };
     AST.HtmlComment.prototype.genDirectives =
     AST.HtmlText.prototype.genDirectives    = function (opts, nl) { return null; };
     AST.HtmlInsert.prototype.genDirectives  = function (opts, nl) {
-        return new AST.AttrStyleDirective('insert', [], this.code, false).genDirective(opts);
+        return ".insert(function () { return " + this.code.genCode(opts) + "; })";
     }
 
     // genDirective
     AST.Property.prototype.genDirective = function (opts) {
         var code = this.code.genCode(opts);
-        if (this.callback) code = genCallback(this.name, code);
         return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
-    AST.Directive.prototype.genDirective = function (opts) {
-        return "." + this.name + "(function (__) { __" + this.code.genCode(opts) + "; })";
-    };
-    AST.AttrStyleDirective.prototype.genDirective = function (opts) {
-        var code = "." + this.name + "(function (__) { __(";
-
-        for (var i = 0; i < this.params.length; i++)
-            code += codeStr(this.params[i]) + ", ";
-
-        code += this.callback ? genCallback(this.name, this.code.genCode(opts))
-                              : this.code.genCode(opts);
-
-        code += "); })";
-
-        return code;
+    AST.Mixin.prototype.genDirective = function (opts) {
+        return ".mixin(function () { return " + this.code.genCode(opts) + "; })";
     };
 
     function genChildDirectives(opts, childNodes, nl) {
@@ -131,11 +113,6 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
                         .replace(rx.singleQuotes, "\\'")
                         .replace(rx.newlines, "\\\n")
                    + "'";
-    }
-
-    function genCallback(name, code) {
-        var param = rx.eventProperty.test(name) ? name.substring(2) : "__";
-        return "function (" + param + ") { " + code + " }";
     }
 
     function indent(prior) {

@@ -13,10 +13,10 @@ define('AST', [], function () {
         HtmlLiteral: function(nodes) {
             this.nodes = nodes; // [ HtmlElement | HtmlComment | HtmlText(ws only) | HtmlInsert ]
         },
-        HtmlElement: function(beginTag, properties, directives, content, endTag) {
+        HtmlElement: function(beginTag, properties, mixins, content, endTag) {
             this.beginTag = beginTag; // string
             this.properties = properties; // [ Property ]
-            this.directives = directives; // [ Directive | AttrStyleDirective ]
+            this.mixins = mixins; // [ Mixin ]
             this.content = content; // [ HtmlElement | HtmlComment | HtmlText | HtmlInsert ]
             this.endTag = endTag; // string | null
         },
@@ -29,20 +29,12 @@ define('AST', [], function () {
         HtmlInsert: function (code) {
             this.code = code; // EmbeddedCode
         },
-        Property: function (name, code, callback) {
-            this.name = name; // string
-            this.code = code; // EmbeddedCode
-            this.callback = callback; // bool
-        },
-        Directive: function (name, code) {
+        Property: function (name, code) {
             this.name = name; // string
             this.code = code; // EmbeddedCode
         },
-        AttrStyleDirective: function (name, params, code, callback) {
-            this.name = name; // string
-            this.params = params; // [ string ]
+        Mixin: function (code) {
             this.code = code; // EmbeddedCode
-            this.callback = callback; // bool
         }
     };
 });

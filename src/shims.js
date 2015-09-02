@@ -3,7 +3,11 @@ define('shims', ['AST'], function (AST) {
 
     // can only probe for shims if we're running in a browser
     if (!this || !this.document) return false;
-
+    
+    var rx = {
+        ws: /^\s*$/
+    };
+    
     var shimmed = false;
 
     // add base shim methods that visit AST
@@ -33,7 +37,7 @@ define('shims', ['AST'], function (AST) {
 
     function addFEFFtoWhitespaceTextNodes() {
         shim(AST.HtmlText, function (ctx) {
-            if (ws.test(this.text) && !(ctx.parent instanceof AST.HtmlAttr)) {
+            if (rx.ws.test(this.text) && !(ctx.parent instanceof AST.HtmlAttr)) {
                 this.text = '&#xfeff;' + this.text;
             }
         });

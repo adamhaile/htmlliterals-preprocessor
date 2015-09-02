@@ -125,7 +125,7 @@ define('sourcemap', [], function () {
         var extract = extractMap(src, original),
             appended = extract.src
               + "\n//# sourceMappingURL=data:"
-              + escape(JSON.stringify(extract.map));
+              + encodeURIComponent(JSON.stringify(extract.map));
 
         return appended;
     }
@@ -176,6 +176,12 @@ define('tokenize', [], function () {
     // pre-compiled regular expressions
     var rx = {
         tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|\/\*|\*\/|(?:[^<>@=\/@=()[\]{}"'\n*-]|(?!-->)-|\/(?![>/*])|\*(?!\/)|(?!<\/?\w|<!--)<\/?)+/g,
+        //       |          |    |    |   | +- =
+        //       |          |    |    |   +- @
+        //       |          |    |    +- -->
+        //       |          |    +- <!--
+        //       |          +- /> or >
+        //       +- < or </ followed by \w
     };
 
     return function tokenize(str, opts) {
@@ -201,10 +207,10 @@ define('AST', [], function () {
         HtmlLiteral: function(nodes) {
             this.nodes = nodes; // [ HtmlElement | HtmlComment | HtmlText(ws only) | HtmlInsert ]
         },
-        HtmlElement: function(beginTag, properties, directives, content, endTag) {
+        HtmlElement: function(beginTag, properties, mixins, content, endTag) {
             this.beginTag = beginTag; // string
             this.properties = properties; // [ Property ]
-            this.directives = directives; // [ Directive | AttrStyleDirective ]
+            this.mixins = mixins; // [ Mixin ]
             this.content = content; // [ HtmlElement | HtmlComment | HtmlText | HtmlInsert ]
             this.endTag = endTag; // string | null
         },
@@ -217,20 +223,12 @@ define('AST', [], function () {
         HtmlInsert: function (code) {
             this.code = code; // EmbeddedCode
         },
-        Property: function (name, code, callback) {
-            this.name = name; // string
-            this.code = code; // EmbeddedCode
-            this.callback = callback; // bool
-        },
-        Directive: function (name, code) {
+        Property: function (name, code) {
             this.name = name; // string
             this.code = code; // EmbeddedCode
         },
-        AttrStyleDirective: function (name, params, code, callback) {
-            this.name = name; // string
-            this.params = params; // [ string ]
+        Mixin: function (code) {
             this.code = code; // EmbeddedCode
-            this.callback = callback; // bool
         }
     };
 });
@@ -239,8 +237,7 @@ define('parse', ['AST'], function (AST) {
 
     // pre-compiled regular expressions
     var rx = {
-        propertyLeftSide   : /\s(\S+)\s*=>?\s*$/,
-        directiveName      : /^[a-zA-Z_$][a-zA-Z_$0-9]*(:[^\s:=]*)*/, // like "foo:bar:blech"
+        propertyLeftSide   : /\s(\S+)\s*=\s*$/,
         stringEscapedEnd   : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
         ws                 : /^\s*$/,
         leadingWs          : /^\s+/,
@@ -308,6 +305,7 @@ define('parse', ['AST'], function (AST) {
                 } else if (IS('@')) {
                     nodes.push(htmlInsert());
                 } else {
+                    // look ahead to see if coming text is whitespace followed by another node
                     mark = MARK();
                     wsText = htmlWhitespaceText();
 
@@ -329,7 +327,7 @@ define('parse', ['AST'], function (AST) {
             var start = LOC(),
                 beginTag = "",
                 properties = [],
-                directives = [],
+                mixins = [],
                 content = [],
                 endTag = "",
                 hasContent = true;
@@ -339,7 +337,7 @@ define('parse', ['AST'], function (AST) {
             // scan for attributes until end of opening tag
             while (!EOF && NOT('>') && NOT('/>')) {
                 if (IS('@')) {
-                    directives.push(directive());
+                    mixins.push(mixin());
                 } else if (IS('=')) {
                     beginTag = property(beginTag, properties);
                 } else {
@@ -380,7 +378,7 @@ define('parse', ['AST'], function (AST) {
                 endTag += TOK, NEXT();
             }
 
-            return new AST.HtmlElement(beginTag, properties, directives, content, endTag);
+            return new AST.HtmlElement(beginTag, properties, mixins, content, endTag);
         }
 
         function htmlText() {
@@ -431,73 +429,40 @@ define('parse', ['AST'], function (AST) {
             if(NOT('=')) ERR("not at equals sign of a property assignment");
 
             var match,
-                name,
-                callback = false;
+                name;
 
             beginTag += TOK, NEXT();
-
-            if (IS('>')) callback = true, beginTag += TOK, NEXT();
 
             if (WS()) beginTag += TOK, NEXT();
 
             match = rx.propertyLeftSide.exec(beginTag);
 
             // check if it's an attribute not a property assignment
-            if (match && (callback || (NOT('"') && NOT("'")))) {
+            if (match && NOT('"') && NOT("'")) {
                 beginTag = beginTag.substring(0, beginTag.length - match[0].length);
 
                 name = match[1];
 
                 SPLIT(rx.leadingWs);
 
-                properties.push(new AST.Property(name, embeddedCode(), callback));
+                properties.push(new AST.Property(name, embeddedCode()));
             }
 
             return beginTag;
         }
 
-        function directive() {
-            if (NOT('@')) ERR("not at start of directive");
+        function mixin() {
+            if (NOT('@')) ERR("not at start of mixin");
 
             NEXT();
 
-            var name = SPLIT(rx.directiveName),
-                text,
-                segments,
-                loc,
-                callback = false;
-
-            if (!name) ERR("directive must have name");
-
-            if (IS('(')) {
-                segments = [];
-                loc = LOC();
-                text = balancedParens(segments, "", loc);
-                if (text) segments.push(new AST.CodeText(text, loc));
-
-                return new AST.Directive(name, new AST.EmbeddedCode(segments));
-            } else {
-                if (WS()) NEXT();
-
-                if (NOT('=')) ERR("unrecognized directive - must have form like @foo:bar = ... or @foo( ... )");
-
-                NEXT();
-
-                if (IS('>')) callback = true, NEXT();
-
-                SPLIT(rx.leadingWs);
-
-                name = name.split(":");
-
-                return new AST.AttrStyleDirective(name[0], name.slice(1), embeddedCode(), callback);
-            }
+            return new AST.Mixin(embeddedCode());
         }
 
         function embeddedCode() {
             var start = LOC(),
                 segments = [],
                 text = "",
-                part,
                 loc = LOC();
 
             // consume source text up to the first top-level terminating character
@@ -674,14 +639,13 @@ define('parse', ['AST'], function (AST) {
             LINE = mark.LINE;
             COL = mark.COL;
         }
-    }
+    };
 });
 
 define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
 
     // pre-compiled regular expressions
     var rx = {
-        eventProperty      : /^on/,
         backslashes        : /\\/g,
         newlines           : /\n/g,
         singleQuotes       : /'/g,
@@ -698,7 +662,7 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
             + this.text
             + (opts.sourcemap ? sourcemap.segmentEnd() : "");
     };
-    var htmlLiteralId = 0; //Math.floor(Math.random() * Math.pow(2, 31));
+    var htmlLiteralId = 0;
     AST.HtmlLiteral.prototype.genCode = function (opts, prior) {
         var html = concatResults(opts, this.nodes, 'genHtml'),
             nl = "\n" + indent(prior),
@@ -724,42 +688,25 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
     AST.HtmlElement.prototype.genDirectives = function (opts, nl) {
         var childDirectives = genChildDirectives(opts, this.content, nl),
             properties = concatResults(opts, this.properties, 'genDirective', nl),
-            directives = concatResults(opts, this.directives, 'genDirective', nl);
+            mixins = concatResults(opts, this.mixins, 'genDirective', nl);
 
-        //return properties + (properties && (directives || childDirectives) ? nl : "")
-        //    + directives + (directives && childDirectives ? nl : "")
-        //    + childDirectives;
-        return childDirectives + (childDirectives && (properties || directives) ? nl : "")
-            + properties + (properties && directives ? nl : "")
-            + directives;
+        return childDirectives + (childDirectives && (properties || mixins) ? nl : "")
+            + properties + (properties && mixins ? nl : "")
+            + mixins;
     };
     AST.HtmlComment.prototype.genDirectives =
     AST.HtmlText.prototype.genDirectives    = function (opts, nl) { return null; };
     AST.HtmlInsert.prototype.genDirectives  = function (opts, nl) {
-        return new AST.AttrStyleDirective('insert', [], this.code, false).genDirective(opts);
+        return ".insert(function () { return " + this.code.genCode(opts) + "; })";
     }
 
     // genDirective
     AST.Property.prototype.genDirective = function (opts) {
         var code = this.code.genCode(opts);
-        if (this.callback) code = genCallback(this.name, code);
         return ".property(function (__) { __." + this.name + " = " + code + "; })";
     };
-    AST.Directive.prototype.genDirective = function (opts) {
-        return "." + this.name + "(function (__) { __" + this.code.genCode(opts) + "; })";
-    };
-    AST.AttrStyleDirective.prototype.genDirective = function (opts) {
-        var code = "." + this.name + "(function (__) { __(";
-
-        for (var i = 0; i < this.params.length; i++)
-            code += codeStr(this.params[i]) + ", ";
-
-        code += this.callback ? genCallback(this.name, this.code.genCode(opts))
-                              : this.code.genCode(opts);
-
-        code += "); })";
-
-        return code;
+    AST.Mixin.prototype.genDirective = function (opts) {
+        return ".mixin(function () { return " + this.code.genCode(opts) + "; })";
     };
 
     function genChildDirectives(opts, childNodes, nl) {
@@ -812,11 +759,6 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
                    + "'";
     }
 
-    function genCallback(name, code) {
-        var param = rx.eventProperty.test(name) ? name.substring(2) : "__";
-        return "function (" + param + ") { " + code + " }";
-    }
-
     function indent(prior) {
         var lastline = rx.lastline.exec(prior);
         lastline = lastline ? lastline[0] : '';
@@ -838,7 +780,11 @@ define('shims', ['AST'], function (AST) {
 
     // can only probe for shims if we're running in a browser
     if (!this || !this.document) return false;
-
+    
+    var rx = {
+        ws: /^\s*$/
+    };
+    
     var shimmed = false;
 
     // add base shim methods that visit AST
@@ -868,7 +814,7 @@ define('shims', ['AST'], function (AST) {
 
     function addFEFFtoWhitespaceTextNodes() {
         shim(AST.HtmlText, function (ctx) {
-            if (ws.test(this.text) && !(ctx.parent instanceof AST.HtmlAttr)) {
+            if (rx.ws.test(this.text) && !(ctx.parent instanceof AST.HtmlAttr)) {
                 this.text = '&#xfeff;' + this.text;
             }
         });

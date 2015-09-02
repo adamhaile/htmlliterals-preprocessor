@@ -25,6 +25,12 @@ define('tokenize', [], function () {
     // pre-compiled regular expressions
     var rx = {
         tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|\/\*|\*\/|(?:[^<>@=\/@=()[\]{}"'\n*-]|(?!-->)-|\/(?![>/*])|\*(?!\/)|(?!<\/?\w|<!--)<\/?)+/g,
+        //       |          |    |    |   | +- =
+        //       |          |    |    |   +- @
+        //       |          |    |    +- -->
+        //       |          |    +- <!--
+        //       |          +- /> or >
+        //       +- < or </ followed by \w
     };
 
     return function tokenize(str, opts) {

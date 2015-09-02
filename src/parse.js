@@ -2,8 +2,7 @@ define('parse', ['AST'], function (AST) {
 
     // pre-compiled regular expressions
     var rx = {
-        propertyLeftSide   : /\s(\S+)\s*=>?\s*$/,
-        directiveName      : /^[a-zA-Z_$][a-zA-Z_$0-9]*(:[^\s:=]*)*/, // like "foo:bar:blech"
+        propertyLeftSide   : /\s(\S+)\s*=\s*$/,
         stringEscapedEnd   : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
         ws                 : /^\s*$/,
         leadingWs          : /^\s+/,
@@ -71,6 +70,7 @@ define('parse', ['AST'], function (AST) {
                 } else if (IS('@')) {
                     nodes.push(htmlInsert());
                 } else {
+                    // look ahead to see if coming text is whitespace followed by another node
                     mark = MARK();
                     wsText = htmlWhitespaceText();
 
@@ -92,7 +92,7 @@ define('parse', ['AST'], function (AST) {
             var start = LOC(),
                 beginTag = "",
                 properties = [],
-                directives = [],
+                mixins = [],
                 content = [],
                 endTag = "",
                 hasContent = true;
@@ -102,7 +102,7 @@ define('parse', ['AST'], function (AST) {
             // scan for attributes until end of opening tag
             while (!EOF && NOT('>') && NOT('/>')) {
                 if (IS('@')) {
-                    directives.push(directive());
+                    mixins.push(mixin());
                 } else if (IS('=')) {
                     beginTag = property(beginTag, properties);
                 } else {
@@ -143,7 +143,7 @@ define('parse', ['AST'], function (AST) {
                 endTag += TOK, NEXT();
             }
 
-            return new AST.HtmlElement(beginTag, properties, directives, content, endTag);
+            return new AST.HtmlElement(beginTag, properties, mixins, content, endTag);
         }
 
         function htmlText() {
@@ -194,73 +194,40 @@ define('parse', ['AST'], function (AST) {
             if(NOT('=')) ERR("not at equals sign of a property assignment");
 
             var match,
-                name,
-                callback = false;
+                name;
 
             beginTag += TOK, NEXT();
-
-            if (IS('>')) callback = true, beginTag += TOK, NEXT();
 
             if (WS()) beginTag += TOK, NEXT();
 
             match = rx.propertyLeftSide.exec(beginTag);
 
             // check if it's an attribute not a property assignment
-            if (match && (callback || (NOT('"') && NOT("'")))) {
+            if (match && NOT('"') && NOT("'")) {
                 beginTag = beginTag.substring(0, beginTag.length - match[0].length);
 
                 name = match[1];
 
                 SPLIT(rx.leadingWs);
 
-                properties.push(new AST.Property(name, embeddedCode(), callback));
+                properties.push(new AST.Property(name, embeddedCode()));
             }
 
             return beginTag;
         }
 
-        function directive() {
-            if (NOT('@')) ERR("not at start of directive");
+        function mixin() {
+            if (NOT('@')) ERR("not at start of mixin");
 
             NEXT();
 
-            var name = SPLIT(rx.directiveName),
-                text,
-                segments,
-                loc,
-                callback = false;
-
-            if (!name) ERR("directive must have name");
-
-            if (IS('(')) {
-                segments = [];
-                loc = LOC();
-                text = balancedParens(segments, "", loc);
-                if (text) segments.push(new AST.CodeText(text, loc));
-
-                return new AST.Directive(name, new AST.EmbeddedCode(segments));
-            } else {
-                if (WS()) NEXT();
-
-                if (NOT('=')) ERR("unrecognized directive - must have form like @foo:bar = ... or @foo( ... )");
-
-                NEXT();
-
-                if (IS('>')) callback = true, NEXT();
-
-                SPLIT(rx.leadingWs);
-
-                name = name.split(":");
-
-                return new AST.AttrStyleDirective(name[0], name.slice(1), embeddedCode(), callback);
-            }
+            return new AST.Mixin(embeddedCode());
         }
 
         function embeddedCode() {
             var start = LOC(),
                 segments = [],
                 text = "",
-                part,
                 loc = LOC();
 
             // consume source text up to the first top-level terminating character
@@ -437,5 +404,5 @@ define('parse', ['AST'], function (AST) {
             LINE = mark.LINE;
             COL = mark.COL;
         }
-    }
+    };
 });
