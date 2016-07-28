@@ -249,7 +249,8 @@ define('parse', ['AST'], function (AST) {
         }
 
         function balancedParens(segments, text, loc) {
-            var end = PARENS();
+            var start = LOC(),
+                end = PARENS();
 
             if (end === undefined) ERR("not in parentheses");
 
@@ -275,7 +276,7 @@ define('parse', ['AST'], function (AST) {
                 }
             }
 
-            if (EOF) ERR("unterminated parentheses");
+            if (EOF) ERR("unterminated parentheses", start);
 
             text += TOK, NEXT();
 
