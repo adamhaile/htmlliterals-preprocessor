@@ -203,14 +203,18 @@ define('parse', ['AST'], function (AST) {
             match = rx.propertyLeftSide.exec(beginTag);
 
             // check if it's an attribute not a property assignment
-            if (match && NOT('"') && NOT("'")) {
-                beginTag = beginTag.substring(0, beginTag.length - match[0].length);
+            if (match) {
+                if (IS('"') || IS("'")) {
+                    beginTag += quotedString();
+                } else {
+                    beginTag = beginTag.substring(0, beginTag.length - match[0].length);
 
-                name = match[1];
+                    name = match[1];
 
-                SPLIT(rx.leadingWs);
+                    SPLIT(rx.leadingWs);
 
-                properties.push(new AST.Property(name, embeddedCode()));
+                    properties.push(new AST.Property(name, embeddedCode()));
+                }
             }
 
             return beginTag;
