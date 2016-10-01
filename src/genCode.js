@@ -3,7 +3,7 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
     // pre-compiled regular expressions
     var rx = {
         backslashes        : /\\/g,
-        newlines           : /\n/g,
+        newlines           : /\r?\n/g,
         singleQuotes       : /'/g,
         firstline          : /^[^\n]*/,
         lastline           : /[^\n]*$/,
@@ -18,12 +18,12 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
             + this.text
             + (opts.sourcemap ? sourcemap.segmentEnd() : "");
     };
-    var htmlLiteralId = 0;
     AST.HtmlLiteral.prototype.genCode = function (opts, prior) {
         var html = concatResults(opts, this.nodes, 'genHtml'),
+            hash = hash52(html),
             nl = "\n" + indent(prior),
             directives = this.nodes.length > 1 ? genChildDirectives(opts, this.nodes, nl) : this.nodes[0].genDirectives(opts, nl),
-            code = "new " + opts.symbol + "(" + htmlLiteralId++ + "," + nl + codeStr(html) + ")";
+            code = "new " + opts.symbol + "(" + hash + "," + nl + codeStr(html) + ")";
 
         if (directives) code += nl + directives + nl;
 
@@ -128,5 +128,21 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
     function firstline(str) {
         var l = rx.firstline.exec(str);
         return l ? l[0] : '';
+    }
+
+    var MAX32 = Math.pow(2 ,32);
+
+    // K&R hash, returning 52-bit integer, the max a double can represent
+    // this gives us an 0.0001% chance of collision with 67k templates (a lot of templates)
+    function hash52(str) {
+        var low = 0, high = 0, i, len, c, v;
+        for (i = 0, len = str.length; i < len; i++) {
+            c = str.charCodeAt(i);
+            v = (low * 31) + c;
+            low = v|0;
+            c = (v - low) / MAX32;
+            high = (high * 31 + c)|0;
+        }
+        return ((high & 0xFFFFF) * MAX32) + low;
     }
 });
