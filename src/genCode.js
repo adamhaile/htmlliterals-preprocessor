@@ -20,14 +20,12 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
     };
     AST.HtmlLiteral.prototype.genCode = function (opts, prior) {
         var html = concatResults(opts, this.nodes, 'genHtml'),
-            hash = hash52(html),
-            nl = "\n" + indent(prior),
-            directives = this.nodes.length > 1 ? genChildDirectives(opts, this.nodes, nl) : this.nodes[0].genDirectives(opts, nl),
-            code = "new " + opts.symbol + "(" + hash + "," + nl + codeStr(html) + ")";
+            id = hash52(html),
+            nl = "\r\n" + indent(prior),
+            init = genInit(opts, this.nodes, nl),
+            code = opts.symbol + "(" + id + "," + nl + codeStr(html) + ")";
 
-        if (directives) code += nl + directives + nl;
-
-        code = "(" + code + ".node)";
+        if (init) code = "(" + init + ")(" + code + ")";
 
         return code;
     };
@@ -40,61 +38,63 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
     AST.HtmlText.prototype.genHtml    = function (opts) { return this.text; };
     AST.HtmlInsert.prototype.genHtml  = function (opts) { return '<!-- insert -->'; };
 
-    // genDirectives
-    AST.HtmlElement.prototype.genDirectives = function (opts, nl) {
-        var childDirectives = genChildDirectives(opts, this.content, nl),
-            properties = concatResults(opts, this.properties, 'genDirective', nl),
-            mixins = concatResults(opts, this.mixins, 'genDirective', nl);
-
-        return childDirectives + (childDirectives && (properties || mixins) ? nl : "")
-            + properties + (properties && mixins ? nl : "")
-            + mixins;
+    // genRefs
+    AST.HtmlElement.prototype.genCommands = function (opts, refs, cmds, refnum, parentnum, child) {
+        var cmdlen = cmds.length;
+        for (var i = 0; i < this.content.length; i++) {
+            this.content[i].genCommands(opts, refs, cmds, Math.max(refnum + 1, refs.length), refnum, i);
+        }
+        for (i = 0; i < this.properties.length; i++) {
+            this.properties[i].genCommand(opts, cmds, refnum);
+        }
+        for (i = 0; i < this.mixins.length; i++) {
+            this.mixins[i].genCommand(opts, cmds, refnum);
+        }
+        if (cmds.length !== cmdlen && refnum !== -1) refs[refnum] = declareRef(refnum, parentnum, child);
     };
-    AST.HtmlComment.prototype.genDirectives =
-    AST.HtmlText.prototype.genDirectives    = function (opts, nl) { return null; };
-    AST.HtmlInsert.prototype.genDirectives  = function (opts, nl) {
-        return ".insert(function () { return " + this.code.genCode(opts) + "; })";
-    }
+    AST.HtmlComment.prototype.genCommands =
+    AST.HtmlText.prototype.genCommands    = function (opts, refs, cmds, refnum, parentnum, child) { };
+    AST.HtmlInsert.prototype.genCommands  = function (opts, refs, cmds, refnum, parentnum, child) {
+        refs[refnum] = declareRef(refnum, parentnum, child);
+        cmds.push(opts.symbol + ".exec(function (state) { return Html.insert(" + ref(refnum) + ", " + this.code.genCode(opts) + ", state); });");
+    };
 
     // genDirective
-    AST.Property.prototype.genDirective = function (opts) {
+    AST.Property.prototype.genCommand = function (opts, cmds, refnum) {
         var code = this.code.genCode(opts);
-        return ".property(function (__) { __." + this.name + " = " + code + "; })";
+        cmds.push(opts.symbol + ".exec(function () { " + ref(refnum) + "." + this.name + " = " + code + "; });");
     };
-    AST.Mixin.prototype.genDirective = function (opts) {
-        return ".mixin(function () { return " + this.code.genCode(opts) + "; })";
+    AST.Mixin.prototype.genCommand = function (opts, cmds, refnum) {
+        var code = this.code.genCode(opts);
+        cmds.push(opts.symbol + ".exec(function (state) { return " + this.code.genCode(opts) + "(" + ref(refnum) + ", state); });");
     };
 
-    function genChildDirectives(opts, childNodes, nl) {
-        var indices = [],
-            directives = [],
-            identifiers = [],
+    function declareRef(refnum, parentnum, child) {
+        return "var " + ref(refnum) + " = " + ref(parentnum) + ".childNodes[" + child + "];";
+    }
+
+    function ref(refnum) {
+        return "__" + (refnum === -1 ? '' : refnum);
+    }
+
+    function genInit(opts, nodes, nl) {
+        var refs = [],
+            cmds = [],
+            //identifiers = [],
             cnl = nl + "    ",
-            ccnl = cnl + "     ",
-            directive,
-            i,
-            result = "";
+            i;
 
-        for (i = 0; i < childNodes.length; i++) {
-            directive = childNodes[i].genDirectives(opts, ccnl);
-            if (directive) {
-                indices.push(i);
-                identifiers.push(childIdentifier(childNodes[i]));
-                directives.push(directive);
+        if (nodes.length === 1) {
+            nodes[0].genCommands(opts, refs, cmds, -1, -1, 0);
+        } else {
+            for (i = 0; i < nodes.length; i++) {
+                nodes[i].genCommands(opts, refs, cmds, refs.length, -1, i);
             }
         }
 
-        if (indices.length) {
-            result += ".child([" + indices.join(", ") + "], function (__) {" + cnl;
-            for (i = 0; i < directives.length; i++) {
-                if (i) result += cnl;
-                result += "// " + identifiers[i] + cnl;
-                result += "__[" + i + "]" + directives[i] + ";"
-            }
-            result += nl + "})";
-        }
+        if (cmds.length === 0) return null;
 
-        return result;
+        return "function (__) {" + cnl + refs.join(cnl) + cnl + cmds.join(cnl) + cnl + "return __;" + nl + "}";
     }
 
     function concatResults(opts, children, method, sep) {
