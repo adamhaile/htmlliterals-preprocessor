@@ -132,13 +132,13 @@ define('parse', ['AST'], function (AST) {
                     }
                 }
 
-                if (EOF) ERR("element missing close tag");
+                if (EOF) ERR("element missing close tag", start);
 
                 while (!EOF && NOT('>')) {
                     endTag += TOK, NEXT();
                 }
 
-                if (EOF) ERR("eof while looking for element close tag");
+                if (EOF) ERR("eof while looking for end of element close tag", start);
 
                 endTag += TOK, NEXT();
             }
@@ -169,13 +169,14 @@ define('parse', ['AST'], function (AST) {
         function htmlComment() {
             if (NOT('<!--')) ERR("not in HTML comment");
 
-            var text = "";
+            var start = LOC(),
+                text = "";
 
             while (!EOF && NOT('-->')) {
                 text += TOK, NEXT();
             }
 
-            if (EOF) ERR("unterminated html comment");
+            if (EOF) ERR("unterminated html comment", start);
 
             text += TOK, NEXT();
 
@@ -290,7 +291,8 @@ define('parse', ['AST'], function (AST) {
         function quotedString() {
             if (NOT("'") && NOT('"')) ERR("not in quoted string");
 
-            var quote,
+            var start = LOC(),
+                quote,
                 text;
 
             quote = text = TOK, NEXT();
@@ -299,7 +301,7 @@ define('parse', ['AST'], function (AST) {
                 text += TOK, NEXT();
             }
 
-            if (EOF) ERR("unterminated string");
+            if (EOF) ERR("unterminated string", start);
 
             text += TOK, NEXT();
 
@@ -324,13 +326,14 @@ define('parse', ['AST'], function (AST) {
         function codeMultiLineComment() {
             if (NOT("/*")) ERR("not in code comment");
 
-            var text = "";
+            var start = LOC(),
+                text = "";
 
             while (!EOF && NOT('*/')) {
                 text += TOK, NEXT();
             }
 
-            if (EOF) ERR("unterminated multi-line comment");
+            if (EOF) ERR("unterminated multi-line comment", start);
 
             text += TOK, NEXT();
 
@@ -347,7 +350,8 @@ define('parse', ['AST'], function (AST) {
         }
 
         function ERR(msg, loc) {
-            var frag = loc ? " at line " + loc.line + " col " + loc.col + ": ``" + TOKS.join('').substr(loc.pos, 30).replace("\n", "") + "''" : "";
+            loc = loc || LOC();
+            var frag = " at line " + loc.line + " col " + loc.col + ": ``" + TOKS.join('').substr(loc.pos, 30).replace("\n", "").replace("\r", "") + "''";
             throw new Error(msg + frag);
         }
 
