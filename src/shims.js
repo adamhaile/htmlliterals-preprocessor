@@ -9,7 +9,6 @@ define('shims', ['AST'], function (AST) {
 
     // add base shim methods that visit AST
     AST.CodeTopLevel.prototype.shim = function (ctx) { shimSiblings(this, this.segments, ctx); };
-    AST.HtmlLiteral.prototype.shim  = function (ctx) { shimSiblings(this, this.nodes, ctx); };
     AST.HtmlElement.prototype.shim  = function (ctx) { shimSiblings(this, this.content, ctx); };
     AST.HtmlInsert.prototype.shim   = function (ctx) { this.code.shim(ctx); };
     AST.EmbeddedCode.prototype.shim = function (ctx) { shimSiblings(this, this.segments, ctx) };
@@ -17,7 +16,7 @@ define('shims', ['AST'], function (AST) {
     AST.HtmlText.prototype.shim     =
     AST.HtmlComment.prototype.shim  = function (ctx) {};
 
-    removeWhitespaceBetweenElements();
+    removeWhitespaceTextNodes();
 
     if (this && this.document && this.document.createElement) {
         // browser-based shims
@@ -30,12 +29,9 @@ define('shims', ['AST'], function (AST) {
 
     return shimmed;
 
-    function removeWhitespaceBetweenElements() {
+    function removeWhitespaceTextNodes() {
         shim(AST.HtmlText, function (ctx) {
-            if (rx.ws.test(this.text) 
-                && (ctx.index === 0 || ctx.sibings[ctx.index - 1] instanceof AST.HtmlElement)
-                && (ctx.index === ctx.sibings.length - 1 || ctx.sibings[ctx.index + 1] instanceof AST.HtmlElement)
-            ) {
+            if (rx.ws.test(this.text)) {
                 prune(ctx);
             }
         });
