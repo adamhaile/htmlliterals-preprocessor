@@ -188,31 +188,25 @@ define('tokenize', [], function () {
         var toks = str.match(rx.tokens);
 
         return toks;
-        //return TokenStream(toks);
     }
 });
 
 define('AST', [], function () {
     return {
         CodeTopLevel: function (segments) {
-            this.segments = segments; // [ CodeText | HtmlLiteral ]
+            this.segments = segments; // [ CodeText | HtmlElement ]
         },
         CodeText: function (text, loc) {
             this.text = text; // string
             this.loc = loc; // { line: int, col: int }
         },
         EmbeddedCode: function (segments) {
-            this.segments = segments; // [ CodeText | HtmlLiteral ]
+            this.segments = segments; // [ CodeText | HtmlElement ]
         },
-        HtmlLiteral: function(nodes) {
-            this.nodes = nodes; // [ HtmlElement | HtmlComment | HtmlText(ws only) | HtmlInsert ]
-        },
-        HtmlElement: function(beginTag, properties, mixins, content, endTag) {
-            this.beginTag = beginTag; // string
-            this.properties = properties; // [ Property ]
-            this.mixins = mixins; // [ Mixin ]
+        HtmlElement: function(tag, properties, content) {
+            this.tag = tag; // string
+            this.properties = properties; // [ StaticProperty | DynamicProperty | Mixin ]
             this.content = content; // [ HtmlElement | HtmlComment | HtmlText | HtmlInsert ]
-            this.endTag = endTag; // string | null
         },
         HtmlText: function (text) {
             this.text = text; // string
@@ -223,7 +217,11 @@ define('AST', [], function () {
         HtmlInsert: function (code) {
             this.code = code; // EmbeddedCode
         },
-        Property: function (name, code) {
+        StaticProperty: function (name, value) {
+            this.name = name; // string
+            this.value = value; // string
+        },
+        DynamicProperty: function (name, code) {
             this.name = name; // string
             this.code = code; // EmbeddedCode
         },
@@ -237,14 +235,11 @@ define('parse', ['AST'], function (AST) {
 
     // pre-compiled regular expressions
     var rx = {
-        propertyLeftSide   : /\s(\S+)\s*=\s*$/,
-        stringEscapedEnd   : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
-        ws                 : /^\s*$/,
-        leadingWs          : /^\s+/,
-        codeTerminator     : /^[\s<>/,;)\]}]/,
-        codeContinuation   : /^[^\s<>/,;)\]}]+/,
-        tagTrailingWs      : /\s+(?=\/?>$)/,
-        emptyLines         : /\n\s+(?=\n)/g
+        identifier       : /^[a-z]\w*/,
+        stringEscapedEnd : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
+        leadingWs        : /^\s+/,
+        codeTerminator   : /^[\s<>/,;)\]}]/,
+        codeContinuation : /^[^\s<>/,;)\]}]+/
     };
 
     var parens = {
@@ -269,10 +264,10 @@ define('parse', ['AST'], function (AST) {
                 loc = LOC();
 
             while (!EOF) {
-                if (IS('<') || IS('<!--') || IS('@')) {
+                if (IS('<')) {
                     if (text) segments.push(new AST.CodeText(text, loc));
                     text = "";
-                    segments.push(htmlLiteral());
+                    segments.push(htmlElement());
                     loc = LOC();
                 } else if (IS('"') || IS("'")) {
                     text += quotedString();
@@ -290,69 +285,41 @@ define('parse', ['AST'], function (AST) {
             return new AST.CodeTopLevel(segments);
         }
 
-        function htmlLiteral() {
-            if (NOT('<') && NOT('<!--') && NOT('@')) ERR("not at start of html expression");
-
-            var nodes = [],
-                mark,
-                wsText;
-
-            while (!EOF) {
-                if (IS('<')) {
-                    nodes.push(htmlElement());
-                } else if (IS('<!--')) {
-                    nodes.push(htmlComment());
-                } else if (IS('@')) {
-                    nodes.push(htmlInsert());
-                } else {
-                    // look ahead to see if coming text is whitespace followed by another node
-                    mark = MARK();
-                    wsText = htmlWhitespaceText();
-
-                    if (!EOF && (IS('<') || IS('<!--') || IS('@'))) {
-                        nodes.push(wsText);
-                    } else {
-                        ROLLBACK(mark);
-                        break;
-                    }
-                }
-            }
-
-            return new AST.HtmlLiteral(nodes);
-        }
-
         function htmlElement() {
             if (NOT('<')) ERR("not at start of html element");
 
             var start = LOC(),
-                beginTag = "",
+                tag = "",
                 properties = [],
-                mixins = [],
                 content = [],
-                endTag = "",
                 hasContent = true;
 
-            beginTag += TOK, NEXT();
+            NEXT(); // pass '<'
 
-            // scan for attributes until end of opening tag
+            tag = SPLIT(rx.identifier);
+
+            if (!tag) ERR("bad element name", start);
+
+            SPLIT(rx.leadingWs);
+
+            // scan for properties until end of opening tag
             while (!EOF && NOT('>') && NOT('/>')) {
-                if (IS('@')) {
-                    mixins.push(mixin());
-                } else if (IS('=')) {
-                    beginTag = property(beginTag, properties);
+                if (MATCH(rx.identifier)) {
+                    properties.push(property());
+                } else if (IS('@')) {
+                    properties.push(mixin());
                 } else {
-                    beginTag += TOK, NEXT();
+                    ERR("unrecognized content in begin tag");
                 }
+
+                SPLIT(rx.leadingWs);
             }
 
             if (EOF) ERR("unterminated start node", start);
 
             hasContent = IS('>');
 
-            beginTag += TOK, NEXT();
-
-            // clean up extra whitespace now that directives have been removed
-            beginTag = beginTag.replace(rx.tagTrailingWs, "").replace(rx.emptyLines, "");
+            NEXT(); // pass '>' or '/>'
 
             if (hasContent) {
                 while (!EOF && NOT('</')) {
@@ -369,32 +336,22 @@ define('parse', ['AST'], function (AST) {
 
                 if (EOF) ERR("element missing close tag", start);
 
-                while (!EOF && NOT('>')) {
-                    endTag += TOK, NEXT();
-                }
+                NEXT(); // pass '</'
 
-                if (EOF) ERR("eof while looking for end of element close tag", start);
+                if (tag !== SPLIT(rx.identifier)) ERR("mismatched open and close tags", start);
 
-                endTag += TOK, NEXT();
+                if (NOT('>')) ERR("malformed close tag");
+
+                NEXT(); // pass '>'
             }
 
-            return new AST.HtmlElement(beginTag, properties, mixins, content, endTag);
+            return new AST.HtmlElement(tag, properties, content);
         }
 
         function htmlText() {
             var text = "";
 
             while (!EOF && NOT('<') && NOT('<!--') && NOT('@') && NOT('</')) {
-                text += TOK, NEXT();
-            }
-
-            return new AST.HtmlText(text);
-        }
-
-        function htmlWhitespaceText() {
-            var text = "";
-
-            while (!EOF && WS()) {
                 text += TOK, NEXT();
             }
 
@@ -421,45 +378,35 @@ define('parse', ['AST'], function (AST) {
         function htmlInsert() {
             if (NOT('@')) ERR("not at start of code insert");
 
-            NEXT();
+            NEXT(); // pass '@'
 
             return new AST.HtmlInsert(embeddedCode());
         }
 
-        function property(beginTag, properties) {
-            if(NOT('=')) ERR("not at equals sign of a property assignment");
+        function property() {
+            if (!MATCH(rx.identifier)) ERR("not at start of property declaration");
 
-            var match,
-                name;
+            var name = SPLIT(rx.identifier);
 
-            beginTag += TOK, NEXT();
+            SPLIT(rx.leadingWs); // pass name
 
-            if (WS()) beginTag += TOK, NEXT();
+            if (NOT('=')) ERR("expected equals sign after property name");
 
-            match = rx.propertyLeftSide.exec(beginTag);
+            NEXT(); // pass '='
 
-            // check if it's an attribute not a property assignment
-            if (match) {
-                if (IS('"') || IS("'")) {
-                    beginTag += quotedString();
-                } else {
-                    beginTag = beginTag.substring(0, beginTag.length - match[0].length);
+            SPLIT(rx.leadingWs);
 
-                    name = match[1];
-
-                    SPLIT(rx.leadingWs);
-
-                    properties.push(new AST.Property(name, embeddedCode()));
-                }
+            if (IS('"') || IS("'")) {
+                return new AST.StaticProperty(name, quotedString());
+            } else {
+                return new AST.DynamicProperty(name, embeddedCode());
             }
-
-            return beginTag;
         }
 
         function mixin() {
             if (NOT('@')) ERR("not at start of mixin");
 
-            NEXT();
+            NEXT(); // pass '@'
 
             return new AST.Mixin(embeddedCode());
         }
@@ -503,12 +450,13 @@ define('parse', ['AST'], function (AST) {
                     text += codeSingleLineComment();
                 } else if (IS('/*')) {
                     text += codeMultiLineComment();
-                } else if (IS("<") || IS('<!--') || IS('@')) {
+                } else if (IS("<")) {
                     if (text) segments.push(new AST.CodeText(text, { line: loc.line, col: loc.col }));
                     text = "";
-                    segments.push(htmlLiteral());
+                    segments.push(htmlElement());
                     loc.line = LINE;
                     loc.col = COL;
+                    loc.POS = POS;
                 } else if (PARENS()) {
                     text = balancedParens(segments, text, loc);
                 } else {
@@ -606,10 +554,6 @@ define('parse', ['AST'], function (AST) {
             return rx.exec(TOK);
         }
 
-        function WS() {
-            return !!MATCH(rx.ws);
-        }
-
         function PARENS() {
             return parens[TOK];
         }
@@ -630,24 +574,6 @@ define('parse', ['AST'], function (AST) {
         function LOC() {
             return { line: LINE, col: COL, pos: POS };
         }
-
-        function MARK() {
-            return {
-                TOK: TOK,
-                i:   i,
-                EOF: EOF,
-                LINE: LINE,
-                COL: COL
-            };
-        }
-
-        function ROLLBACK(mark) {
-            TOK = mark.TOK;
-            i   = mark.i;
-            EOF = mark.EOF;
-            LINE = mark.LINE;
-            COL = mark.COL;
-        }
     };
 });
 
@@ -658,9 +584,7 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
         backslashes        : /\\/g,
         newlines           : /\r?\n/g,
         singleQuotes       : /'/g,
-        firstline          : /^[^\n]*/,
-        lastline           : /[^\n]*$/,
-        nonws              : /\S/g
+        indent : /\n(?=[^\n]+$)([ \t]*)/
     };
 
     // genCode
@@ -671,83 +595,85 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
             + this.text
             + (opts.sourcemap ? sourcemap.segmentEnd() : "");
     };
-    AST.HtmlLiteral.prototype.genCode = function (opts, prior) {
-        var html = concatResults(opts, this.nodes, 'genHtml'),
-            id = hash52(html),
-            nl = "\r\n" + indent(prior),
-            init = genInit(opts, this.nodes, nl),
-            code = opts.symbol + "(" + id + "," + nl + codeStr(html) + ")";
+    AST.HtmlElement.prototype.genCode = function (opts, prior) {
+        var nl = "\r\n" + indent(prior),
+            inl = nl + '    ',
+            iinl = inl + '    ',
+            ids = [],
+            inits = [],
+            exes = [];
+        
+        this.genDOMStatements(opts, ids, inits, exes, null, 0);
 
-        if (init) code = "(" + init + ")(" + code + ")";
-
-        return code;
+        return '(function () {' + iinl 
+            + 'var ' + ids.join(', ') + ';' + iinl
+            + inits.join(iinl) + iinl 
+            + exes.join(iinl) + iinl
+            + 'return __;' + inl +  '})()';
     };
 
-    // genHtml
-    AST.HtmlElement.prototype.genHtml = function(opts) {
-        return this.beginTag + concatResults(opts, this.content, 'genHtml') + (this.endTag || "");
-    };
-    AST.HtmlComment.prototype.genHtml =
-    AST.HtmlText.prototype.genHtml    = function (opts) { return this.text; };
-    AST.HtmlInsert.prototype.genHtml  = function (opts) { return '<!-- insert -->'; };
-
-    // genRefs
-    AST.HtmlElement.prototype.genCommands = function (opts, refs, cmds, refnum, parentnum, child) {
-        var cmdlen = cmds.length;
-        for (var i = 0; i < this.content.length; i++) {
-            this.content[i].genCommands(opts, refs, cmds, Math.max(refnum + 1, refs.length), refnum, i);
+    // genDOMStatements
+    AST.HtmlElement.prototype.genDOMStatements     = function (opts, ids, inits, exes, parent, n) {
+        var id = genIdentifier(ids, parent, this.tag, n),
+            myexes = [];
+        createElement(inits, id, this.tag);
+        for (var i = 0; i < this.properties.length; i++) {
+            this.properties[i].genDOMStatements(opts, ids, inits, myexes, id, i);
         }
-        for (i = 0; i < this.properties.length; i++) {
-            this.properties[i].genCommand(opts, cmds, refnum);
+        for (i = 0; i < this.content.length; i++) {
+            this.content[i].genDOMStatements(opts, ids, inits, exes, id, i);
         }
-        for (i = 0; i < this.mixins.length; i++) {
-            this.mixins[i].genCommand(opts, cmds, refnum);
-        }
-        if (cmds.length !== cmdlen && refnum !== -1) refs[refnum] = declareRef(refnum, parentnum, child);
+        exes.push.apply(exes, myexes);
+        if (parent) appendNode(inits, parent, id);
     };
-    AST.HtmlComment.prototype.genCommands =
-    AST.HtmlText.prototype.genCommands    = function (opts, refs, cmds, refnum, parentnum, child) { };
-    AST.HtmlInsert.prototype.genCommands  = function (opts, refs, cmds, refnum, parentnum, child) {
-        refs[refnum] = declareRef(refnum, parentnum, child);
-        cmds.push(opts.symbol + ".exec(function (state) { return Html.insert(" + ref(refnum) + ", " + this.code.genCode(opts) + ", state); });");
+    AST.HtmlComment.prototype.genDOMStatements     = function (opts, ids, inits, exes, parent, n) {
+        var id = genIdentifier(ids, parent, 'comment', n);
+        createComment(inits, id, this.text);
+        appendNode(inits, parent, id);
+    }
+    AST.HtmlText.prototype.genDOMStatements        = function (opts, ids, inits, exes, parent, n) { 
+        var id = genIdentifier(ids, parent, 'text', n);
+        createText(inits, id, this.text);
+        appendNode(inits, parent, id);
     };
-
-    // genDirective
-    AST.Property.prototype.genCommand = function (opts, cmds, refnum) {
+    AST.HtmlInsert.prototype.genDOMStatements      = function (opts, ids, inits, exes, parent, n) {
+        var id = genIdentifier(ids, parent, 'insert', n);
+        createComment(inits, id, 'insert');
+        appendNode(inits, parent, id);
+        exes.push(opts.symbol + ".exec(function (__state) { return Html.insert(" + id + ", " + this.code.genCode(opts) + ", __state); });");
+    };
+    AST.StaticProperty.prototype.genDOMStatements  = function (opts, ids, inits, exes, id, n) {
+        inits.push(id + "." + this.name + " = " + this.value + ";");
+    };
+    AST.DynamicProperty.prototype.genDOMStatements = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
-        cmds.push(opts.symbol + ".exec(function () { " + ref(refnum) + "." + this.name + " = " + code + "; });");
+        exes.push(opts.symbol + ".exec(function () { " + id + "." + this.name + " = " + code + "; });");
     };
-    AST.Mixin.prototype.genCommand = function (opts, cmds, refnum) {
+    AST.Mixin.prototype.genDOMStatements           = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
-        cmds.push(opts.symbol + ".exec(function (state) { return " + this.code.genCode(opts) + "(" + ref(refnum) + ", state); });");
+        exes.push(opts.symbol + ".exec(function (__state) { return " + code + "(" + id + ", __state); });");
     };
 
-    function declareRef(refnum, parentnum, child) {
-        return "var " + ref(refnum) + " = " + ref(parentnum) + ".childNodes[" + child + "];";
+    function genIdentifier(ids, parent, tag, n) {
+        var id = parent === null ? '__' : parent + (parent[parent.length - 1] === '_' ? '' : '_') + tag + (n + 1);
+        ids.push(id);
+        return id;
     }
 
-    function ref(refnum) {
-        return "__" + (refnum === -1 ? '' : refnum);
+    function createElement(stmts, id, tag) {
+        stmts.push(id + ' = document.createElement(\'' + tag + '\');');
     }
 
-    function genInit(opts, nodes, nl) {
-        var refs = [],
-            cmds = [],
-            //identifiers = [],
-            cnl = nl + "    ",
-            i;
+    function createComment(stmts, id, text) {
+        stmts.push(id + ' = document.createComment(' + codeStr(text) + ');');
+    }
 
-        if (nodes.length === 1) {
-            nodes[0].genCommands(opts, refs, cmds, -1, -1, 0);
-        } else {
-            for (i = 0; i < nodes.length; i++) {
-                nodes[i].genCommands(opts, refs, cmds, refs.length, -1, i);
-            }
-        }
+    function createText(stmts, id, text) {
+        stmts.push(id + ' = document.createTextNode(' + codeStr(text) + ');');
+    }
 
-        if (cmds.length === 0) return null;
-
-        return "function (__) {" + cnl + refs.join(cnl) + cnl + cmds.join(cnl) + cnl + "return __;" + nl + "}";
+    function appendNode(stmts, parent, child) {
+        stmts.push(parent + '.appendChild(' + child + ');');
     }
 
     function concatResults(opts, children, method, sep) {
@@ -761,42 +687,16 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
         return result;
     }
 
+    function indent(prior) {
+        var m = rx.indent.exec(prior);
+        return m ? m[1] : '';
+    }
+
     function codeStr(str) {
         return "'" + str.replace(rx.backslashes, "\\\\")
                         .replace(rx.singleQuotes, "\\'")
                         .replace(rx.newlines, "\\\n")
                    + "'";
-    }
-
-    function indent(prior) {
-        var lastline = rx.lastline.exec(prior);
-        lastline = lastline ? lastline[0] : '';
-        return lastline.replace(rx.nonws, " ");
-    }
-
-    function childIdentifier(child) {
-        return firstline(child.beginTag || child.text || child.genHtml());
-    }
-
-    function firstline(str) {
-        var l = rx.firstline.exec(str);
-        return l ? l[0] : '';
-    }
-
-    var MAX32 = Math.pow(2 ,32);
-
-    // K&R hash, returning 52-bit integer, the max a double can represent
-    // this gives us an 0.0001% chance of collision with 67k templates (a lot of templates)
-    function hash52(str) {
-        var low = 0, high = 0, i, len, c, v;
-        for (i = 0, len = str.length; i < len; i++) {
-            c = str.charCodeAt(i);
-            v = (low * 31) + c;
-            low = v|0;
-            c = (v - low) / MAX32;
-            high = (high * 31 + c)|0;
-        }
-        return ((high & 0xFFFFF) * MAX32) + low;
     }
 });
 
@@ -811,7 +711,6 @@ define('shims', ['AST'], function (AST) {
 
     // add base shim methods that visit AST
     AST.CodeTopLevel.prototype.shim = function (ctx) { shimSiblings(this, this.segments, ctx); };
-    AST.HtmlLiteral.prototype.shim  = function (ctx) { shimSiblings(this, this.nodes, ctx); };
     AST.HtmlElement.prototype.shim  = function (ctx) { shimSiblings(this, this.content, ctx); };
     AST.HtmlInsert.prototype.shim   = function (ctx) { this.code.shim(ctx); };
     AST.EmbeddedCode.prototype.shim = function (ctx) { shimSiblings(this, this.segments, ctx) };
@@ -819,7 +718,7 @@ define('shims', ['AST'], function (AST) {
     AST.HtmlText.prototype.shim     =
     AST.HtmlComment.prototype.shim  = function (ctx) {};
 
-    removeWhitespaceBetweenElements();
+    removeWhitespaceTextNodes();
 
     if (this && this.document && this.document.createElement) {
         // browser-based shims
@@ -832,12 +731,9 @@ define('shims', ['AST'], function (AST) {
 
     return shimmed;
 
-    function removeWhitespaceBetweenElements() {
+    function removeWhitespaceTextNodes() {
         shim(AST.HtmlText, function (ctx) {
-            if (rx.ws.test(this.text) 
-                && (ctx.index === 0 || ctx.sibings[ctx.index - 1] instanceof AST.HtmlElement)
-                && (ctx.index === ctx.sibings.length - 1 || ctx.sibings[ctx.index + 1] instanceof AST.HtmlElement)
-            ) {
+            if (rx.ws.test(this.text)) {
                 prune(ctx);
             }
         });

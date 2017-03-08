@@ -2,14 +2,11 @@ define('parse', ['AST'], function (AST) {
 
     // pre-compiled regular expressions
     var rx = {
-        propertyLeftSide   : /\s(\S+)\s*=\s*$/,
-        stringEscapedEnd   : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
-        ws                 : /^\s*$/,
-        leadingWs          : /^\s+/,
-        codeTerminator     : /^[\s<>/,;)\]}]/,
-        codeContinuation   : /^[^\s<>/,;)\]}]+/,
-        tagTrailingWs      : /\s+(?=\/?>$)/,
-        emptyLines         : /\n\s+(?=\n)/g
+        identifier       : /^[a-z]\w*/,
+        stringEscapedEnd : /[^\\](\\\\)*\\$/, // ending in odd number of escape slashes = next char of string escaped
+        leadingWs        : /^\s+/,
+        codeTerminator   : /^[\s<>/,;)\]}]/,
+        codeContinuation : /^[^\s<>/,;)\]}]+/
     };
 
     var parens = {
@@ -34,10 +31,10 @@ define('parse', ['AST'], function (AST) {
                 loc = LOC();
 
             while (!EOF) {
-                if (IS('<') || IS('<!--') || IS('@')) {
+                if (IS('<')) {
                     if (text) segments.push(new AST.CodeText(text, loc));
                     text = "";
-                    segments.push(htmlLiteral());
+                    segments.push(htmlElement());
                     loc = LOC();
                 } else if (IS('"') || IS("'")) {
                     text += quotedString();
@@ -55,69 +52,41 @@ define('parse', ['AST'], function (AST) {
             return new AST.CodeTopLevel(segments);
         }
 
-        function htmlLiteral() {
-            if (NOT('<') && NOT('<!--') && NOT('@')) ERR("not at start of html expression");
-
-            var nodes = [],
-                mark,
-                wsText;
-
-            while (!EOF) {
-                if (IS('<')) {
-                    nodes.push(htmlElement());
-                } else if (IS('<!--')) {
-                    nodes.push(htmlComment());
-                } else if (IS('@')) {
-                    nodes.push(htmlInsert());
-                } else {
-                    // look ahead to see if coming text is whitespace followed by another node
-                    mark = MARK();
-                    wsText = htmlWhitespaceText();
-
-                    if (!EOF && (IS('<') || IS('<!--') || IS('@'))) {
-                        nodes.push(wsText);
-                    } else {
-                        ROLLBACK(mark);
-                        break;
-                    }
-                }
-            }
-
-            return new AST.HtmlLiteral(nodes);
-        }
-
         function htmlElement() {
             if (NOT('<')) ERR("not at start of html element");
 
             var start = LOC(),
-                beginTag = "",
+                tag = "",
                 properties = [],
-                mixins = [],
                 content = [],
-                endTag = "",
                 hasContent = true;
 
-            beginTag += TOK, NEXT();
+            NEXT(); // pass '<'
 
-            // scan for attributes until end of opening tag
+            tag = SPLIT(rx.identifier);
+
+            if (!tag) ERR("bad element name", start);
+
+            SPLIT(rx.leadingWs);
+
+            // scan for properties until end of opening tag
             while (!EOF && NOT('>') && NOT('/>')) {
-                if (IS('@')) {
-                    mixins.push(mixin());
-                } else if (IS('=')) {
-                    beginTag = property(beginTag, properties);
+                if (MATCH(rx.identifier)) {
+                    properties.push(property());
+                } else if (IS('@')) {
+                    properties.push(mixin());
                 } else {
-                    beginTag += TOK, NEXT();
+                    ERR("unrecognized content in begin tag");
                 }
+
+                SPLIT(rx.leadingWs);
             }
 
             if (EOF) ERR("unterminated start node", start);
 
             hasContent = IS('>');
 
-            beginTag += TOK, NEXT();
-
-            // clean up extra whitespace now that directives have been removed
-            beginTag = beginTag.replace(rx.tagTrailingWs, "").replace(rx.emptyLines, "");
+            NEXT(); // pass '>' or '/>'
 
             if (hasContent) {
                 while (!EOF && NOT('</')) {
@@ -134,32 +103,22 @@ define('parse', ['AST'], function (AST) {
 
                 if (EOF) ERR("element missing close tag", start);
 
-                while (!EOF && NOT('>')) {
-                    endTag += TOK, NEXT();
-                }
+                NEXT(); // pass '</'
 
-                if (EOF) ERR("eof while looking for end of element close tag", start);
+                if (tag !== SPLIT(rx.identifier)) ERR("mismatched open and close tags", start);
 
-                endTag += TOK, NEXT();
+                if (NOT('>')) ERR("malformed close tag");
+
+                NEXT(); // pass '>'
             }
 
-            return new AST.HtmlElement(beginTag, properties, mixins, content, endTag);
+            return new AST.HtmlElement(tag, properties, content);
         }
 
         function htmlText() {
             var text = "";
 
             while (!EOF && NOT('<') && NOT('<!--') && NOT('@') && NOT('</')) {
-                text += TOK, NEXT();
-            }
-
-            return new AST.HtmlText(text);
-        }
-
-        function htmlWhitespaceText() {
-            var text = "";
-
-            while (!EOF && WS()) {
                 text += TOK, NEXT();
             }
 
@@ -186,45 +145,35 @@ define('parse', ['AST'], function (AST) {
         function htmlInsert() {
             if (NOT('@')) ERR("not at start of code insert");
 
-            NEXT();
+            NEXT(); // pass '@'
 
             return new AST.HtmlInsert(embeddedCode());
         }
 
-        function property(beginTag, properties) {
-            if(NOT('=')) ERR("not at equals sign of a property assignment");
+        function property() {
+            if (!MATCH(rx.identifier)) ERR("not at start of property declaration");
 
-            var match,
-                name;
+            var name = SPLIT(rx.identifier);
 
-            beginTag += TOK, NEXT();
+            SPLIT(rx.leadingWs); // pass name
 
-            if (WS()) beginTag += TOK, NEXT();
+            if (NOT('=')) ERR("expected equals sign after property name");
 
-            match = rx.propertyLeftSide.exec(beginTag);
+            NEXT(); // pass '='
 
-            // check if it's an attribute not a property assignment
-            if (match) {
-                if (IS('"') || IS("'")) {
-                    beginTag += quotedString();
-                } else {
-                    beginTag = beginTag.substring(0, beginTag.length - match[0].length);
+            SPLIT(rx.leadingWs);
 
-                    name = match[1];
-
-                    SPLIT(rx.leadingWs);
-
-                    properties.push(new AST.Property(name, embeddedCode()));
-                }
+            if (IS('"') || IS("'")) {
+                return new AST.StaticProperty(name, quotedString());
+            } else {
+                return new AST.DynamicProperty(name, embeddedCode());
             }
-
-            return beginTag;
         }
 
         function mixin() {
             if (NOT('@')) ERR("not at start of mixin");
 
-            NEXT();
+            NEXT(); // pass '@'
 
             return new AST.Mixin(embeddedCode());
         }
@@ -268,12 +217,13 @@ define('parse', ['AST'], function (AST) {
                     text += codeSingleLineComment();
                 } else if (IS('/*')) {
                     text += codeMultiLineComment();
-                } else if (IS("<") || IS('<!--') || IS('@')) {
+                } else if (IS("<")) {
                     if (text) segments.push(new AST.CodeText(text, { line: loc.line, col: loc.col }));
                     text = "";
-                    segments.push(htmlLiteral());
+                    segments.push(htmlElement());
                     loc.line = LINE;
                     loc.col = COL;
+                    loc.POS = POS;
                 } else if (PARENS()) {
                     text = balancedParens(segments, text, loc);
                 } else {
@@ -371,10 +321,6 @@ define('parse', ['AST'], function (AST) {
             return rx.exec(TOK);
         }
 
-        function WS() {
-            return !!MATCH(rx.ws);
-        }
-
         function PARENS() {
             return parens[TOK];
         }
@@ -394,24 +340,6 @@ define('parse', ['AST'], function (AST) {
 
         function LOC() {
             return { line: LINE, col: COL, pos: POS };
-        }
-
-        function MARK() {
-            return {
-                TOK: TOK,
-                i:   i,
-                EOF: EOF,
-                LINE: LINE,
-                COL: COL
-            };
-        }
-
-        function ROLLBACK(mark) {
-            TOK = mark.TOK;
-            i   = mark.i;
-            EOF = mark.EOF;
-            LINE = mark.LINE;
-            COL = mark.COL;
         }
     };
 });

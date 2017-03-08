@@ -5,9 +5,7 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
         backslashes        : /\\/g,
         newlines           : /\r?\n/g,
         singleQuotes       : /'/g,
-        firstline          : /^[^\n]*/,
-        lastline           : /[^\n]*$/,
-        nonws              : /\S/g
+        indent : /\n(?=[^\n]+$)([ \t]*)/
     };
 
     // genCode
@@ -18,83 +16,85 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
             + this.text
             + (opts.sourcemap ? sourcemap.segmentEnd() : "");
     };
-    AST.HtmlLiteral.prototype.genCode = function (opts, prior) {
-        var html = concatResults(opts, this.nodes, 'genHtml'),
-            id = hash52(html),
-            nl = "\r\n" + indent(prior),
-            init = genInit(opts, this.nodes, nl),
-            code = opts.symbol + "(" + id + "," + nl + codeStr(html) + ")";
+    AST.HtmlElement.prototype.genCode = function (opts, prior) {
+        var nl = "\r\n" + indent(prior),
+            inl = nl + '    ',
+            iinl = inl + '    ',
+            ids = [],
+            inits = [],
+            exes = [];
+        
+        this.genDOMStatements(opts, ids, inits, exes, null, 0);
 
-        if (init) code = "(" + init + ")(" + code + ")";
-
-        return code;
+        return '(function () {' + iinl 
+            + 'var ' + ids.join(', ') + ';' + iinl
+            + inits.join(iinl) + iinl 
+            + exes.join(iinl) + iinl
+            + 'return __;' + inl +  '})()';
     };
 
-    // genHtml
-    AST.HtmlElement.prototype.genHtml = function(opts) {
-        return this.beginTag + concatResults(opts, this.content, 'genHtml') + (this.endTag || "");
-    };
-    AST.HtmlComment.prototype.genHtml =
-    AST.HtmlText.prototype.genHtml    = function (opts) { return this.text; };
-    AST.HtmlInsert.prototype.genHtml  = function (opts) { return '<!-- insert -->'; };
-
-    // genRefs
-    AST.HtmlElement.prototype.genCommands = function (opts, refs, cmds, refnum, parentnum, child) {
-        var cmdlen = cmds.length;
-        for (var i = 0; i < this.content.length; i++) {
-            this.content[i].genCommands(opts, refs, cmds, Math.max(refnum + 1, refs.length), refnum, i);
+    // genDOMStatements
+    AST.HtmlElement.prototype.genDOMStatements     = function (opts, ids, inits, exes, parent, n) {
+        var id = genIdentifier(ids, parent, this.tag, n),
+            myexes = [];
+        createElement(inits, id, this.tag);
+        for (var i = 0; i < this.properties.length; i++) {
+            this.properties[i].genDOMStatements(opts, ids, inits, myexes, id, i);
         }
-        for (i = 0; i < this.properties.length; i++) {
-            this.properties[i].genCommand(opts, cmds, refnum);
+        for (i = 0; i < this.content.length; i++) {
+            this.content[i].genDOMStatements(opts, ids, inits, exes, id, i);
         }
-        for (i = 0; i < this.mixins.length; i++) {
-            this.mixins[i].genCommand(opts, cmds, refnum);
-        }
-        if (cmds.length !== cmdlen && refnum !== -1) refs[refnum] = declareRef(refnum, parentnum, child);
+        exes.push.apply(exes, myexes);
+        if (parent) appendNode(inits, parent, id);
     };
-    AST.HtmlComment.prototype.genCommands =
-    AST.HtmlText.prototype.genCommands    = function (opts, refs, cmds, refnum, parentnum, child) { };
-    AST.HtmlInsert.prototype.genCommands  = function (opts, refs, cmds, refnum, parentnum, child) {
-        refs[refnum] = declareRef(refnum, parentnum, child);
-        cmds.push(opts.symbol + ".exec(function (state) { return Html.insert(" + ref(refnum) + ", " + this.code.genCode(opts) + ", state); });");
+    AST.HtmlComment.prototype.genDOMStatements     = function (opts, ids, inits, exes, parent, n) {
+        var id = genIdentifier(ids, parent, 'comment', n);
+        createComment(inits, id, this.text);
+        appendNode(inits, parent, id);
+    }
+    AST.HtmlText.prototype.genDOMStatements        = function (opts, ids, inits, exes, parent, n) { 
+        var id = genIdentifier(ids, parent, 'text', n);
+        createText(inits, id, this.text);
+        appendNode(inits, parent, id);
     };
-
-    // genDirective
-    AST.Property.prototype.genCommand = function (opts, cmds, refnum) {
+    AST.HtmlInsert.prototype.genDOMStatements      = function (opts, ids, inits, exes, parent, n) {
+        var id = genIdentifier(ids, parent, 'insert', n);
+        createComment(inits, id, 'insert');
+        appendNode(inits, parent, id);
+        exes.push(opts.symbol + ".exec(function (__state) { return Html.insert(" + id + ", " + this.code.genCode(opts) + ", __state); });");
+    };
+    AST.StaticProperty.prototype.genDOMStatements  = function (opts, ids, inits, exes, id, n) {
+        inits.push(id + "." + this.name + " = " + this.value + ";");
+    };
+    AST.DynamicProperty.prototype.genDOMStatements = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
-        cmds.push(opts.symbol + ".exec(function () { " + ref(refnum) + "." + this.name + " = " + code + "; });");
+        exes.push(opts.symbol + ".exec(function () { " + id + "." + this.name + " = " + code + "; });");
     };
-    AST.Mixin.prototype.genCommand = function (opts, cmds, refnum) {
+    AST.Mixin.prototype.genDOMStatements           = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
-        cmds.push(opts.symbol + ".exec(function (state) { return " + this.code.genCode(opts) + "(" + ref(refnum) + ", state); });");
+        exes.push(opts.symbol + ".exec(function (__state) { return " + code + "(" + id + ", __state); });");
     };
 
-    function declareRef(refnum, parentnum, child) {
-        return "var " + ref(refnum) + " = " + ref(parentnum) + ".childNodes[" + child + "];";
+    function genIdentifier(ids, parent, tag, n) {
+        var id = parent === null ? '__' : parent + (parent[parent.length - 1] === '_' ? '' : '_') + tag + (n + 1);
+        ids.push(id);
+        return id;
     }
 
-    function ref(refnum) {
-        return "__" + (refnum === -1 ? '' : refnum);
+    function createElement(stmts, id, tag) {
+        stmts.push(id + ' = document.createElement(\'' + tag + '\');');
     }
 
-    function genInit(opts, nodes, nl) {
-        var refs = [],
-            cmds = [],
-            //identifiers = [],
-            cnl = nl + "    ",
-            i;
+    function createComment(stmts, id, text) {
+        stmts.push(id + ' = document.createComment(' + codeStr(text) + ');');
+    }
 
-        if (nodes.length === 1) {
-            nodes[0].genCommands(opts, refs, cmds, -1, -1, 0);
-        } else {
-            for (i = 0; i < nodes.length; i++) {
-                nodes[i].genCommands(opts, refs, cmds, refs.length, -1, i);
-            }
-        }
+    function createText(stmts, id, text) {
+        stmts.push(id + ' = document.createTextNode(' + codeStr(text) + ');');
+    }
 
-        if (cmds.length === 0) return null;
-
-        return "function (__) {" + cnl + refs.join(cnl) + cnl + cmds.join(cnl) + cnl + "return __;" + nl + "}";
+    function appendNode(stmts, parent, child) {
+        stmts.push(parent + '.appendChild(' + child + ');');
     }
 
     function concatResults(opts, children, method, sep) {
@@ -108,41 +108,15 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
         return result;
     }
 
+    function indent(prior) {
+        var m = rx.indent.exec(prior);
+        return m ? m[1] : '';
+    }
+
     function codeStr(str) {
         return "'" + str.replace(rx.backslashes, "\\\\")
                         .replace(rx.singleQuotes, "\\'")
                         .replace(rx.newlines, "\\\n")
                    + "'";
-    }
-
-    function indent(prior) {
-        var lastline = rx.lastline.exec(prior);
-        lastline = lastline ? lastline[0] : '';
-        return lastline.replace(rx.nonws, " ");
-    }
-
-    function childIdentifier(child) {
-        return firstline(child.beginTag || child.text || child.genHtml());
-    }
-
-    function firstline(str) {
-        var l = rx.firstline.exec(str);
-        return l ? l[0] : '';
-    }
-
-    var MAX32 = Math.pow(2 ,32);
-
-    // K&R hash, returning 52-bit integer, the max a double can represent
-    // this gives us an 0.0001% chance of collision with 67k templates (a lot of templates)
-    function hash52(str) {
-        var low = 0, high = 0, i, len, c, v;
-        for (i = 0, len = str.length; i < len; i++) {
-            c = str.charCodeAt(i);
-            v = (low * 31) + c;
-            low = v|0;
-            c = (v - low) / MAX32;
-            high = (high * 31 + c)|0;
-        }
-        return ((high & 0xFFFFF) * MAX32) + low;
     }
 });

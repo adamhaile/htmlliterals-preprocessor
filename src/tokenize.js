@@ -37,6 +37,5 @@ define('tokenize', [], function () {
         var toks = str.match(rx.tokens);
 
         return toks;
-        //return TokenStream(toks);
     }
 });
