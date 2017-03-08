@@ -6,7 +6,7 @@ describe("HTML fragment literal", function () {
                        <p>para 3</p>;                           \
                                                                 \
             expect(frag instanceof DocumentFragment).toBe(true);\
-            expect(frag.childNodes.length).toBe(5);             \
+            expect(frag.childNodes.length).toBe(3);             \
         '));
     });
 

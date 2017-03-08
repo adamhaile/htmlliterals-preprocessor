@@ -802,9 +802,6 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
 
 // Cross-browser compatibility shims
 define('shims', ['AST'], function (AST) {
-
-    // can only probe for shims if we're running in a browser
-    if (!this || !this.document) return false;
     
     var rx = {
         ws: /^\s*$/
@@ -816,18 +813,35 @@ define('shims', ['AST'], function (AST) {
     AST.CodeTopLevel.prototype.shim = function (ctx) { shimSiblings(this, this.segments, ctx); };
     AST.HtmlLiteral.prototype.shim  = function (ctx) { shimSiblings(this, this.nodes, ctx); };
     AST.HtmlElement.prototype.shim  = function (ctx) { shimSiblings(this, this.content, ctx); };
-    AST.HtmlInsert.prototype.shim   = function (ctx) { shimSiblings(this, this.segments, ctx) };
+    AST.HtmlInsert.prototype.shim   = function (ctx) { this.code.shim(ctx); };
+    AST.EmbeddedCode.prototype.shim = function (ctx) { shimSiblings(this, this.segments, ctx) };
     AST.CodeText.prototype.shim     =
     AST.HtmlText.prototype.shim     =
     AST.HtmlComment.prototype.shim  = function (ctx) {};
 
-    if (!browserPreservesWhitespaceTextNodes())
-        addFEFFtoWhitespaceTextNodes();
+    removeWhitespaceBetweenElements();
 
-    if (!browserPreservesInitialComments())
-        insertTextNodeBeforeInitialComments();
+    if (this && this.document && this.document.createElement) {
+        // browser-based shims
+        if (!browserPreservesWhitespaceTextNodes())
+            addFEFFtoWhitespaceTextNodes();
+
+        if (!browserPreservesInitialComments())
+            insertTextNodeBeforeInitialComments();
+    }
 
     return shimmed;
+
+    function removeWhitespaceBetweenElements() {
+        shim(AST.HtmlText, function (ctx) {
+            if (rx.ws.test(this.text) 
+                && (ctx.index === 0 || ctx.sibings[ctx.index - 1] instanceof AST.HtmlElement)
+                && (ctx.index === ctx.sibings.length - 1 || ctx.sibings[ctx.index + 1] instanceof AST.HtmlElement)
+            ) {
+                prune(ctx);
+            }
+        });
+    }
 
     // IE <9 will removes text nodes that just contain whitespace in certain situations.
     // Solution is to add a zero-width non-breaking space (entity &#xfeff) to the nodes.
@@ -862,16 +876,28 @@ define('shims', ['AST'], function (AST) {
     }
 
     function shimSiblings(parent, siblings, prevCtx) {
-        var ctx = { index: 0, parent: parent, sibings: siblings }
+        var ctx = { index: 0, parent: parent, sibings: siblings, prune: false }
         for (; ctx.index < siblings.length; ctx.index++) {
             siblings[ctx.index].shim(ctx);
+            if (ctx.prune) {
+                siblings.splice(ctx.index, 1);
+                ctx.index--;
+                ctx.prune = false;
+            }
         }
     }
 
     function shim(node, fn) {
         shimmed = true;
         var oldShim = node.prototype.shim;
-        node.prototype.shim = function (ctx) { fn.call(this, ctx); oldShim.call(this, ctx); };
+        node.prototype.shim = function (ctx) { 
+            fn.call(this, ctx); 
+            if (!ctx.prune) oldShim.call(this, ctx); 
+        };
+    }
+
+    function prune(ctx) {
+        ctx.prune = true;
     }
 
     function insertBefore(node, ctx) {
