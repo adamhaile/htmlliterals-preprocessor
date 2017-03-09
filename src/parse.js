@@ -73,8 +73,10 @@ define('parse', ['AST'], function (AST) {
             while (!EOF && NOT('>') && NOT('/>')) {
                 if (MATCH(rx.identifier)) {
                     properties.push(property());
-                } else if (IS('@')) {
+                } else if (!opts.jsx && IS('@')) {
                     properties.push(mixin());
+                } else if (opts.jsx && IS('{...')) {
+                    ERR("JSX spread operator not supported");
                 } else {
                     ERR("unrecognized content in begin tag");
                 }
@@ -92,8 +94,10 @@ define('parse', ['AST'], function (AST) {
                 while (!EOF && NOT('</')) {
                     if (IS('<')) {
                         content.push(htmlElement());
-                    } else if (IS('@')) {
+                    } else if (!opts.jsx && IS('@')) {
                         content.push(htmlInsert());
+                    } else if (opts.jsx && IS('{')) {
+                        content.push(jsxHtmlInsert());
                     } else if (IS('<!--')) {
                         content.push(htmlComment());
                     } else {
@@ -118,7 +122,7 @@ define('parse', ['AST'], function (AST) {
         function htmlText() {
             var text = "";
 
-            while (!EOF && NOT('<') && NOT('<!--') && NOT('@') && NOT('</')) {
+            while (!EOF && NOT('<') && NOT('<!--') && (opts.jsx ? NOT('{') : NOT('@')) && NOT('</')) {
                 text += TOK, NEXT();
             }
 
@@ -150,6 +154,10 @@ define('parse', ['AST'], function (AST) {
             return new AST.HtmlInsert(embeddedCode());
         }
 
+        function jsxHtmlInsert() {
+            return new AST.HtmlInsert(jsxEmbeddedCode());
+        }
+
         function property() {
             if (!MATCH(rx.identifier)) ERR("not at start of property declaration");
 
@@ -165,8 +173,12 @@ define('parse', ['AST'], function (AST) {
 
             if (IS('"') || IS("'")) {
                 return new AST.StaticProperty(name, quotedString());
-            } else {
+            } else if (opts.jsx && IS('{')) {
+                return new AST.DynamicProperty(name, jsxEmbeddedCode());
+            } else if (!opts.jsx) {
                 return new AST.DynamicProperty(name, embeddedCode());
+            } else {
+                ERR("unexepected value for JSX property");
             }
         }
 
@@ -198,6 +210,23 @@ define('parse', ['AST'], function (AST) {
             if (text) segments.push(new AST.CodeText(text, loc));
 
             if (segments.length === 0) ERR("not in embedded code", start);
+
+            return new AST.EmbeddedCode(segments);
+        }
+
+        function jsxEmbeddedCode() {
+            if (NOT('{')) ERR("not at start of JSX embedded code");
+
+            var segments = [],
+                loc = LOC(),
+                last = balancedParens(segments, "", loc);
+            
+            // replace opening and closing '{' and '}' with '(' and ')'
+            last = last.substr(0, last.length - 1) + ')';
+            segments.push(new AST.CodeText(last, loc));
+
+            var first = segments[0];
+            first.text = '(' + first.text.substr(1);
 
             return new AST.EmbeddedCode(segments);
         }

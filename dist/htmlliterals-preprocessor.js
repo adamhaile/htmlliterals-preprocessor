@@ -159,6 +159,7 @@ define('tokenize', [], function () {
     /// -->
     /// @
     /// =
+    /// {...
     /// )
     /// (
     /// [
@@ -175,7 +176,7 @@ define('tokenize', [], function () {
 
     // pre-compiled regular expressions
     var rx = {
-        tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|\/\*|\*\/|(?:[^<>@=\/@=()[\]{}"'\n*-]|(?!-->)-|\/(?![>/*])|\*(?!\/)|(?!<\/?\w|<!--)<\/?)+/g,
+        tokens: /<\/?(?=\w)|\/?>|<!--|-->|@|=|\{\.\.\.|\)|\(|\[|\]|\{|\}|"|'|\/\/|\n|\/\*|\*\/|(?:[^<>@=\/@=()[\]{}"'\n*-]|(?!-->)-|\/(?![>/*])|\*(?!\/)|(?!<\/?\w|<!--)<\/?)+/g,
         //       |          |    |    |   | +- =
         //       |          |    |    |   +- @
         //       |          |    |    +- -->
@@ -306,8 +307,10 @@ define('parse', ['AST'], function (AST) {
             while (!EOF && NOT('>') && NOT('/>')) {
                 if (MATCH(rx.identifier)) {
                     properties.push(property());
-                } else if (IS('@')) {
+                } else if (!opts.jsx && IS('@')) {
                     properties.push(mixin());
+                } else if (opts.jsx && IS('{...')) {
+                    ERR("JSX spread operator not supported");
                 } else {
                     ERR("unrecognized content in begin tag");
                 }
@@ -325,8 +328,10 @@ define('parse', ['AST'], function (AST) {
                 while (!EOF && NOT('</')) {
                     if (IS('<')) {
                         content.push(htmlElement());
-                    } else if (IS('@')) {
+                    } else if (!opts.jsx && IS('@')) {
                         content.push(htmlInsert());
+                    } else if (opts.jsx && IS('{')) {
+                        content.push(jsxHtmlInsert());
                     } else if (IS('<!--')) {
                         content.push(htmlComment());
                     } else {
@@ -351,7 +356,7 @@ define('parse', ['AST'], function (AST) {
         function htmlText() {
             var text = "";
 
-            while (!EOF && NOT('<') && NOT('<!--') && NOT('@') && NOT('</')) {
+            while (!EOF && NOT('<') && NOT('<!--') && (opts.jsx ? NOT('{') : NOT('@')) && NOT('</')) {
                 text += TOK, NEXT();
             }
 
@@ -383,6 +388,10 @@ define('parse', ['AST'], function (AST) {
             return new AST.HtmlInsert(embeddedCode());
         }
 
+        function jsxHtmlInsert() {
+            return new AST.HtmlInsert(jsxEmbeddedCode());
+        }
+
         function property() {
             if (!MATCH(rx.identifier)) ERR("not at start of property declaration");
 
@@ -398,8 +407,12 @@ define('parse', ['AST'], function (AST) {
 
             if (IS('"') || IS("'")) {
                 return new AST.StaticProperty(name, quotedString());
-            } else {
+            } else if (opts.jsx && IS('{')) {
+                return new AST.DynamicProperty(name, jsxEmbeddedCode());
+            } else if (!opts.jsx) {
                 return new AST.DynamicProperty(name, embeddedCode());
+            } else {
+                ERR("unexepected value for JSX property");
             }
         }
 
@@ -431,6 +444,23 @@ define('parse', ['AST'], function (AST) {
             if (text) segments.push(new AST.CodeText(text, loc));
 
             if (segments.length === 0) ERR("not in embedded code", start);
+
+            return new AST.EmbeddedCode(segments);
+        }
+
+        function jsxEmbeddedCode() {
+            if (NOT('{')) ERR("not at start of JSX embedded code");
+
+            var segments = [],
+                loc = LOC(),
+                last = balancedParens(segments, "", loc);
+            
+            // replace opening and closing '{' and '}' with '(' and ')'
+            last = last.substr(0, last.length - 1) + ')';
+            segments.push(new AST.CodeText(last, loc));
+
+            var first = segments[0];
+            first.text = '(' + first.text.substr(1);
 
             return new AST.EmbeddedCode(segments);
         }
@@ -643,11 +673,11 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
         exes.push(opts.symbol + ".exec(function (__state) { return Html.insert(" + id + ", " + this.code.genCode(opts) + ", __state); });");
     };
     AST.StaticProperty.prototype.genDOMStatements  = function (opts, ids, inits, exes, id, n) {
-        inits.push(id + "." + this.name + " = " + this.value + ";");
+        inits.push(id + "." + propName(opts, this.name) + " = " + this.value + ";");
     };
     AST.DynamicProperty.prototype.genDOMStatements = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
-        exes.push(opts.symbol + ".exec(function () { " + id + "." + this.name + " = " + code + "; });");
+        exes.push(opts.symbol + ".exec(function () { " + id + "." + propName(opts, this.name) + " = " + code + "; });");
     };
     AST.Mixin.prototype.genDOMStatements           = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
@@ -674,6 +704,10 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
 
     function appendNode(stmts, parent, child) {
         stmts.push(parent + '.appendChild(' + child + ');');
+    }
+
+    function propName(opts, name) {
+        return opts.jsx && name.substr(0, 2) === 'on' ? name.toLowerCase() : name;
     }
 
     function concatResults(opts, children, method, sep) {
@@ -813,6 +847,7 @@ define('preprocess', ['tokenize', 'parse', 'shims', 'sourcemap'], function (toke
         opts = opts || {};
         opts.symbol = opts.symbol || 'Html';
         opts.sourcemap = opts.sourcemap || null;
+        opts.jsx = opts.jsx || false;
 
         var toks = tokenize(str, opts),
             ast = parse(toks, opts);

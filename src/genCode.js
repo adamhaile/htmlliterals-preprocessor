@@ -64,11 +64,11 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
         exes.push(opts.symbol + ".exec(function (__state) { return Html.insert(" + id + ", " + this.code.genCode(opts) + ", __state); });");
     };
     AST.StaticProperty.prototype.genDOMStatements  = function (opts, ids, inits, exes, id, n) {
-        inits.push(id + "." + this.name + " = " + this.value + ";");
+        inits.push(id + "." + propName(opts, this.name) + " = " + this.value + ";");
     };
     AST.DynamicProperty.prototype.genDOMStatements = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
-        exes.push(opts.symbol + ".exec(function () { " + id + "." + this.name + " = " + code + "; });");
+        exes.push(opts.symbol + ".exec(function () { " + id + "." + propName(opts, this.name) + " = " + code + "; });");
     };
     AST.Mixin.prototype.genDOMStatements           = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
@@ -95,6 +95,10 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
 
     function appendNode(stmts, parent, child) {
         stmts.push(parent + '.appendChild(' + child + ');');
+    }
+
+    function propName(opts, name) {
+        return opts.jsx && name.substr(0, 2) === 'on' ? name.toLowerCase() : name;
     }
 
     function concatResults(opts, children, method, sep) {

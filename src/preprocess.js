@@ -3,6 +3,7 @@ define('preprocess', ['tokenize', 'parse', 'shims', 'sourcemap'], function (toke
         opts = opts || {};
         opts.symbol = opts.symbol || 'Html';
         opts.sourcemap = opts.sourcemap || null;
+        opts.jsx = opts.jsx || false;
 
         var toks = tokenize(str, opts),
             ast = parse(toks, opts);
