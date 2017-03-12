@@ -668,16 +668,20 @@ define('genCode', ['AST', 'sourcemap'], function (AST, sourcemap) {
     };
     AST.HtmlInsert.prototype.genDOMStatements      = function (opts, ids, inits, exes, parent, n) {
         var id = genIdentifier(ids, parent, 'insert', n);
-        createComment(inits, id, 'insert');
+        createText(inits, id, '');
         appendNode(inits, parent, id);
-        exes.push(opts.symbol + ".exec(function (__state) { return Html.insert(" + id + ", " + this.code.genCode(opts) + ", __state); });");
+        exes.push(opts.symbol + ".exec(function (range) { return Html.insert(range, " + this.code.genCode(opts) + "); }, { start: " + id + ", end: " + id + " });");
     };
     AST.StaticProperty.prototype.genDOMStatements  = function (opts, ids, inits, exes, id, n) {
         inits.push(id + "." + propName(opts, this.name) + " = " + this.value + ";");
     };
     AST.DynamicProperty.prototype.genDOMStatements = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
-        exes.push(opts.symbol + ".exec(function () { " + id + "." + propName(opts, this.name) + " = " + code + "; });");
+        if (this.name === "ref") {
+            inits.push(code + " = " + id + ";");
+        } else {
+            exes.push(opts.symbol + ".exec(function () { " + id + "." + propName(opts, this.name) + " = " + code + "; });");
+        }
     };
     AST.Mixin.prototype.genDOMStatements           = function (opts, ids, inits, exes, id, n) {
         var code = this.code.genCode(opts);
